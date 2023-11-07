@@ -8,7 +8,7 @@ from jax.lax import scan
 import jax.random as random
 import jax
 from tqdm import tqdm
-from biff.network import ScoreApprox
+from fusions.network import ScoreApprox
 
 
 import optax

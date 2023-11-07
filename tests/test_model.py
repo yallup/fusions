@@ -1,10 +1,8 @@
-from biff.biff import DiffusionModelBase
+from fusions.model import DiffusionModelBase
 
 import numpy as np
 import jax.numpy as jnp
 import jax
-import jax.random as random
-import scipy.stats
 from numpy.testing import assert_allclose
 import pytest
 import os

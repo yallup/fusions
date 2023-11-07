@@ -1,4 +1,4 @@
-from biff import DiffusionModel
+from fusions import DiffusionModel
 
 # from biff.biff import DiffusionModelBase
 from jax import numpy as jnp

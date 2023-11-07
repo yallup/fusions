@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "biff"
+name = "fusions"
 version = "0.1.0"
-description = "beta diffusion"
+description = "Diffusion meets nested sampling"
 authors = ["David Yallup <david.yallup@gmail.com>"]
 readme = "README.md"
 
