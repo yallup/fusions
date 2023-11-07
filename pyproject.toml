@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "fusions"
+version = "0.1.0"
+description = "Diffusion meets nested sampling"
+authors = ["David Yallup <david.yallup@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+flax = "^0.7.5"
+anesthetic = "^2.4.2"
+pytest = "^7.3"
+tqdm = "^4.62.0"
+
+# Testing related dependencies - optional
+[tool.poetry.group.test.dependencies]
+pytest = "^7.3"
+pytest-cov = "^4.0"
+[tool.poetry.group.test]
+optional = true
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+# flake8 - basic linter
+[tool.flake8]
+count = true
+# compatibility with black
+max-line-length = 88
+ignore = ['E203', 'W503']
+exclude = ['examples']
