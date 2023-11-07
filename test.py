@@ -1,11 +1,15 @@
-from fusions import DiffusionModel
+import numpy as np
 
 # from biff.biff import DiffusionModelBase
 from jax import numpy as jnp
-import numpy as np
+
+from fusions import DiffusionModel
 
 model = DiffusionModel()
-model.read_chains("data/gaussian_2d")
+
+
+model.read_chains("data/gaussian")
+
 
 x0 = np.random.normal(0, 1, (1000, 2))
 model.train()
