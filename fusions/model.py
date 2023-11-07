@@ -1,25 +1,24 @@
-import anesthetic as ns
-from jax import grad, jit, vmap
-import jax.numpy as jnp
-from jax.scipy.special import logsumexp
-import matplotlib.pyplot as plt
 from functools import partial
-from jax.lax import scan
-import jax.random as random
+
+import anesthetic as ns
 import jax
-from tqdm import tqdm
-from fusions.network import ScoreApprox
-
-
+import jax.numpy as jnp
+import jax.random as random
+import matplotlib.pyplot as plt
 import optax
+from jax import grad, jit, vmap
+from jax.lax import scan
+from jax.scipy.special import logsumexp
+from tqdm import tqdm
 
+from fusions.network import ScoreApprox
 
 
 class DiffusionModelBase(object):
     def __init__(self, **kwargs) -> None:
         self.chains = None
         self.steps = kwargs.get("steps", 100)
-        beta_t = jnp.linspace(0.001, 1, self.steps)
+        # beta_t = jnp.linspace(0.001, 1, self.steps)
         self.beta_min = 1e-3
         self.beta_max = 1
         self.rng = random.PRNGKey(2022)
@@ -32,9 +31,7 @@ class DiffusionModelBase(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_t(self, t):
-        return t * self.beta_min + 0.5 * t**2 * (
-            self.beta_max - self.beta_min
-        )
+        return t * self.beta_min + 0.5 * t**2 * (self.beta_max - self.beta_min)
 
     def mean_factor(self, t):
         return jnp.exp(-0.5 * self.alpha_t(t))
@@ -90,18 +87,16 @@ class DiffusionModel(DiffusionModelBase):
         return loss
 
     def _train(self, data, batch_size=128, N_epochs=1000):
-
         dummy_x = jnp.zeros(2 * batch_size).reshape((batch_size, data.shape[-1]))
         dummy_t = jnp.ones((batch_size, 1))
-        
+
         params = self.score_model().init(self.rng, dummy_x, dummy_t)
         optimizer = optax.adam(1e-3)
         opt_state = optimizer.init(params)
 
-        
         @jit
         def update_step(params, batch, opt_state):
-            val, grads = jax.value_and_grad(self.loss)(params,batch)
+            val, grads = jax.value_and_grad(self.loss)(params, batch)
             updates, opt_state = optimizer.update(grads, opt_state)
             params = optax.apply_updates(params, updates)
             return val, params, opt_state
@@ -127,4 +122,4 @@ class DiffusionModel(DiffusionModelBase):
         return params
 
     def train(self):
-        self._train(self.chains.to_numpy()[...,:-3])
+        self._train(self.chains.to_numpy()[..., :-3])
