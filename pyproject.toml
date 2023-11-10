@@ -11,6 +11,7 @@ flax = "^0.7.5"
 anesthetic = "^2.4.2"
 pytest = "^7.3"
 tqdm = "^4.62.0"
+torch = "^2.1.0"
 
 # Testing related dependencies - optional
 [tool.poetry.group.test.dependencies]

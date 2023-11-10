@@ -1,38 +1,16 @@
 from functools import partial
-from typing import Any
 
 import anesthetic as ns
 import jax
 import jax.numpy as jnp
 import jax.random as random
-import matplotlib.pyplot as plt
 import optax
-
 from jax import grad, jit, vmap
 from jax.lax import scan
 from jax.scipy.special import logsumexp
 from tqdm import tqdm
 
-# from tqdm.auto import tqdm
-
-from fusions.network import ScoreApprox, TrainState
-
-
-def sample_sphere(J):
-    """
-    2 dimensional sample
-
-    N_samples: Number of samples
-    Returns a (N_samples, 2) array of samples
-    """
-    alphas = jnp.linspace(0, 2 * jnp.pi * (1 - 1 / J), J)
-    xs = jnp.cos(alphas)
-    ys = jnp.sin(alphas)
-    mf = jnp.stack([xs, ys], axis=1)
-    return mf
-
-
-data = sample_sphere(8)
+from fusions.network import DataLoader, ScoreApprox, TrainState
 
 
 class DiffusionModelBase(object):
@@ -41,9 +19,11 @@ class DiffusionModelBase(object):
         self.steps = kwargs.get("steps", 1000)
         # beta_t = jnp.linspace(0.001, 1, self.steps)
         self.beta_min = 1e-3
-        self.beta_max = 3
+        self.beta_max = 1
         self.rng = random.PRNGKey(2022)
-        self.train_ts = jnp.linspace(self.beta_min, self.beta_max, self.steps)
+        R = self.steps
+        self.train_ts = jnp.arange(1, R) / (R - 1)
+        # self.train_ts = jnp.linspace(self.beta_min, self.beta_max, self.steps)
         self.ndims = None
 
     def read_chains(self, path: str, ndims: int = None) -> None:
@@ -61,9 +41,7 @@ class DiffusionModelBase(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_t(self, t):
-        return t * self.beta_min + 0.5 * t**2 * (
-            self.beta_max - self.beta_min
-        )
+        return t * self.beta_min + 0.5 * t**2 * (self.beta_max - self.beta_min)
 
     def mean_factor(self, t):
         return jnp.exp(-0.5 * self.alpha_t(t))
@@ -88,14 +66,19 @@ class DiffusionModelBase(object):
             drift = -self.drift(x, 1 - t) + disp**2 * score(x, 1 - t)
             noise = random.normal(step_rng, x.shape)
             x = x + dt * drift + jnp.sqrt(dt) * disp * noise
-            return (x, rng), ()
+            return (x, rng), (carry)
 
         rng, step_rng = random.split(self.rng)
-        # initial = random.normal(step_rng, (self.n_samples, self.N))
         dts = self.train_ts[1:] - self.train_ts[:-1]
         params = jnp.stack([self.train_ts[:-1], dts], axis=1)
-        (x, _), _ = scan(f, (initial_samples, rng), params)
-        return x
+        (x, _), (x_t, _) = scan(f, (initial_samples, rng), params)
+        return x, x_t
+
+    def log_hat_pt(self, data, x, t):
+        means = data * self.mean_factor(t)
+        v = self.var(t)
+        potentials = jnp.sum(-((x - means) ** 2) / (2 * v), axis=1)
+        return logsumexp(potentials, axis=0, b=1 / self.ndims)
 
 
 class DiffusionModel(DiffusionModelBase):
@@ -107,14 +90,11 @@ class DiffusionModel(DiffusionModelBase):
         return ScoreApprox()
 
     @partial(jit, static_argnums=[0])
-    def loss(self, params, batch, batch_stats):
-        rng, step_rng = random.split(self.rng)
+    def loss(self, params, batch, batch_stats, rng):
+        rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
-        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (
-            self.steps - 1
-        )
+        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
         mean_coeff = self.mean_factor(t)
-        # is it right to have the square root here for the loss?
         vs = self.var(t)
         stds = jnp.sqrt(vs)
         rng, step_rng = random.split(rng)
@@ -127,31 +107,21 @@ class DiffusionModel(DiffusionModelBase):
             train=True,
             mutable=["batch_stats"],
         )
-        # output, updates = self.score_model().apply(
-        #     {"params": params, "batch_stats": batch_stats},
-        #     xt,
-        #     t,
-        #     train=True,
-        #     mutable=["batch_stats"],
-        # )
 
         loss = jnp.mean((noise + output * stds) ** 2)
         return loss, updates
 
     def _train(self, data, **kwargs):
-        # opt_state = optimizer.init(params)
         batch_size = kwargs.get("batch_size", 128)
         n_epochs = kwargs.get("n_epochs", 1000)
 
         @jit
-        def update_step(state, batch):
-            (val, updates), grads = jax.value_and_grad(
-                self.loss, has_aux=True
-            )(state.params, batch, state.batch_stats)
+        def update_step(state, batch, rng):
+            (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
+                state.params, batch, state.batch_stats, rng
+            )
             state = state.apply_gradients(grads=grads)
             state = state.replace(batch_stats=updates["batch_stats"])
-            # updates, opt_state = optimizer.update(grads, state)
-            # params = optax.apply_updates(params, updates)
             return val, state
 
         train_size = data.shape[0]
@@ -160,32 +130,25 @@ class DiffusionModel(DiffusionModelBase):
         steps_per_epoch = train_size // batch_size
         losses = []
         tepochs = tqdm(range(n_epochs))
-
         for k in tepochs:
-            rng, step_rng = random.split(self.rng)
+            self.rng, step_rng = random.split(self.rng)
             perms = jax.random.permutation(step_rng, train_size)
-            # perms = perms[
-            #     : steps_per_epoch * batch_size
-            # ]  # skip incomplete batch
+            perms = perms[: steps_per_epoch * batch_size]  # skip incomplete batch
             perms = perms.reshape((steps_per_epoch, batch_size))
             for perm in perms:
                 batch = data[perm, :]
-                rng, step_rng = random.split(rng)
-                loss, self.state = update_step(self.state, batch)
+                self.rng, step_rng = random.split(self.rng)
+                loss, self.state = update_step(self.state, batch, step_rng)
                 losses.append(loss)
             if (k + 1) % 100 == 0:
                 mean_loss = jnp.mean(jnp.array(losses))
                 tepochs.set_postfix(loss=mean_loss)
-                losses = []
 
     def init_state(self, data, **kwargs):
-        # batch_size = min(batch_size, data.shape[0])
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
-        _params = self.score_model().init(
-            self.rng, dummy_x, dummy_t, train=False
-        )
+        _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -198,9 +161,12 @@ class DiffusionModel(DiffusionModelBase):
             tx=optimizer,
         )
 
-    def train(self, **kwargs):
+    def train(self, data, **kwargs):
+        self.ndims = data.shape[-1]
+        # data = self.chains.sample(200).to_numpy()[..., :-3]
         if not self.state:
-            self.init_state(data)
+            self.init_state(data, **kwargs)
+
         self._train(data, **kwargs)
         self._predict = lambda x, t: self.state.apply_fn(
             {
