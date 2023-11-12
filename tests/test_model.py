@@ -1,4 +1,4 @@
-from fusions.model import DiffusionModelBase
+from fusions.model import DiffusionModelBase, DiffusionModel
 
 import numpy as np
 import jax.numpy as jnp
@@ -21,6 +21,14 @@ class TestDiffusionBase(object):
     def t(self):
         return jnp.linspace(0, 1, 100)
 
+    @pytest.fixture
+    def rng(self):
+        return jax.random.PRNGKey(2022)
+
+    @pytest.fixture
+    def batch(self, rng):
+        return jax.random.normal(rng, (10, 2))
+
     def test_read_chains(self, model):
         model.read_chains(os.path.join(test_path, "data/data"))
         assert model.chains is not None
@@ -42,5 +50,41 @@ class TestDiffusionBase(object):
     def test_reverse_sde(self, model):
         rng, step_rng = jax.random.split(model.rng)
         initial_samples = jax.random.normal(step_rng, (10, 2))
-        samples = model.reverse_sde(initial_samples, lambda x, y: x * y)
+        samples, samples_t = model.reverse_sde(
+            initial_samples, lambda x, y: x * y
+        )
         assert (initial_samples != samples).all()
+
+
+class TestDiffusion(TestDiffusionBase):
+    CLS = DiffusionModel
+
+    @pytest.fixture
+    def train_opts(self):
+        return {"batch_size": 10, "lr": 1e-3, "n_epochs": 1}
+
+    def test_init_state(self, model, batch):
+        model.ndims = batch.shape[-1]
+        model._init_state()
+        assert model.state is not None
+
+    def test_loss(self, model, rng, batch):
+        model.ndims = batch.shape[-1]
+        model._init_state()
+        loss = model.loss(
+            model.state.params, batch, model.state.batch_stats, rng
+        )
+        assert loss[0].dtype == np.float32
+
+    def test_train_step(self, model, batch, train_opts):
+        model.ndims = batch.shape[-1]
+        model._init_state()
+        model._train(batch, **train_opts)
+        assert model.state.step == 1
+
+    def test_train(self, model, batch, train_opts):
+        model.ndims = batch.shape[-1]
+        model._init_state()
+        model.train(batch, **train_opts)
+        assert model.state.step == 1
+        x1,x1_t = model.predict(batch)
