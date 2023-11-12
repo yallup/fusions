@@ -9,8 +9,9 @@ from jax import grad, jit, vmap
 from jax.lax import scan
 from jax.scipy.special import logsumexp
 from tqdm import tqdm
+from scipy.stats import norm
 
-from fusions.network import DataLoader, ScoreApprox, TrainState
+from fusions.network import ScoreApprox, TrainState
 
 
 class DiffusionModelBase(object):
@@ -25,6 +26,8 @@ class DiffusionModelBase(object):
         self.train_ts = jnp.arange(1, R) / (R - 1)
         # self.train_ts = jnp.linspace(self.beta_min, self.beta_max, self.steps)
         self.ndims = None
+
+    # def prior(self):
 
     def read_chains(self, path: str, ndims: int = None) -> None:
         self.chains = ns.read_chains(path)
@@ -41,7 +44,9 @@ class DiffusionModelBase(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_t(self, t):
-        return t * self.beta_min + 0.5 * t**2 * (self.beta_max - self.beta_min)
+        return t * self.beta_min + 0.5 * t**2 * (
+            self.beta_max - self.beta_min
+        )
 
     def mean_factor(self, t):
         return jnp.exp(-0.5 * self.alpha_t(t))
@@ -74,11 +79,11 @@ class DiffusionModelBase(object):
         (x, _), (x_t, _) = scan(f, (initial_samples, rng), params)
         return x, x_t
 
-    def log_hat_pt(self, data, x, t):
-        means = data * self.mean_factor(t)
-        v = self.var(t)
-        potentials = jnp.sum(-((x - means) ** 2) / (2 * v), axis=1)
-        return logsumexp(potentials, axis=0, b=1 / self.ndims)
+    # def log_hat_pt(self, data, x, t):
+    #     means = data * self.mean_factor(t)
+    #     v = self.var(t)
+    #     potentials = jnp.sum(-((x - means) ** 2) / (2 * v), axis=1)
+    #     return logsumexp(potentials, axis=0, b=1 / self.ndims)
 
 
 class DiffusionModel(DiffusionModelBase):
@@ -93,7 +98,9 @@ class DiffusionModel(DiffusionModelBase):
     def loss(self, params, batch, batch_stats, rng):
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
-        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
+        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (
+            self.steps - 1
+        )
         mean_coeff = self.mean_factor(t)
         vs = self.var(t)
         stds = jnp.sqrt(vs)
@@ -117,9 +124,9 @@ class DiffusionModel(DiffusionModelBase):
 
         @jit
         def update_step(state, batch, rng):
-            (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
-                state.params, batch, state.batch_stats, rng
-            )
+            (val, updates), grads = jax.value_and_grad(
+                self.loss, has_aux=True
+            )(state.params, batch, state.batch_stats, rng)
             state = state.apply_gradients(grads=grads)
             state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
@@ -133,7 +140,9 @@ class DiffusionModel(DiffusionModelBase):
         for k in tepochs:
             self.rng, step_rng = random.split(self.rng)
             perms = jax.random.permutation(step_rng, train_size)
-            perms = perms[: steps_per_epoch * batch_size]  # skip incomplete batch
+            perms = perms[
+                : steps_per_epoch * batch_size
+            ]  # skip incomplete batch
             perms = perms.reshape((steps_per_epoch, batch_size))
             for perm in perms:
                 batch = data[perm, :]
@@ -144,11 +153,13 @@ class DiffusionModel(DiffusionModelBase):
                 mean_loss = jnp.mean(jnp.array(losses))
                 tepochs.set_postfix(loss=mean_loss)
 
-    def init_state(self, data, **kwargs):
+    def _init_state(self, **kwargs):
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
-        _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
+        _params = self.score_model().init(
+            self.rng, dummy_x, dummy_t, train=False
+        )
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -165,7 +176,7 @@ class DiffusionModel(DiffusionModelBase):
         self.ndims = data.shape[-1]
         # data = self.chains.sample(200).to_numpy()[..., :-3]
         if not self.state:
-            self.init_state(data, **kwargs)
+            self._init_state(**kwargs)
 
         self._train(data, **kwargs)
         self._predict = lambda x, t: self.state.apply_fn(
