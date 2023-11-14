@@ -35,13 +35,14 @@ from flax.training import train_state
 
 class TrainState(train_state.TrainState):
     batch_stats: Any
+    losses: Any
 
 
 class ScoreApprox(nn.Module):
     """A simple model with multiple fully connected layers and some fourier features for the time variable."""
 
     n_initial: int = 256
-    n_hidden: int = 256
+    n_hidden: int = 16
     act = nn.leaky_relu
 
     @nn.compact
