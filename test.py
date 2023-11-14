@@ -3,8 +3,6 @@ from functools import partial
 import anesthetic as ns
 import numpy as np
 from anesthetic.examples.perfect_ns import gaussian
-
-# from biff.biff import DiffusionModelBase
 from jax import grad, jit
 from jax import numpy as jnp
 from jax import random, vmap
