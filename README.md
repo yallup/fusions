@@ -6,4 +6,4 @@
 
 Diffusion meets (nested) sampling
 
-A miniminal implementation of generative diffusion
+A miniminal implementation of generative diffusion models in JAX (Flax). Tuned for usage in building emulators for scientific models, particularly where MCMC sampling is tractable and used.
