@@ -14,7 +14,20 @@ from fusions.network import ScoreApprox, TrainState
 
 
 class DiffusionModelBase(object):
+    """Base class for the diffusion model.
+
+    Implements the core (non-neural) functionality."""
+
     def __init__(self, prior=None, **kwargs) -> None:
+        """Initialise the diffusion model.
+
+        Args:
+            prior (scipy.stats.rv_continuous): Prior distribution to use. Defaults to None.
+
+        Keyword Args:
+            steps (int): Number of steps to use in the diffusion model. Defaults to 1000.
+        """
+
         self.chains = None
         self.steps = kwargs.get("steps", 1000)
         # beta_t = jnp.linspace(0.001, 1, self.steps)
@@ -29,7 +42,8 @@ class DiffusionModelBase(object):
 
     # def prior(self):
 
-    def read_chains(self, path: str, ndims: int = None) -> None:
+    def _read_chains(self, path: str, ndims: int = None) -> None:
+        """Read chains from a file."""
         self.chains = ns.read_chains(path)
         if not ndims:
             self.ndims = self.chains.to_numpy()[..., :-3].shape[-1]
@@ -41,25 +55,41 @@ class DiffusionModelBase(object):
         # self.train_ts = jnp.interp(new_ds, D_KL, beta)
 
     def beta_t(self, t):
+        """Beta function of the diffusion model."""
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_t(self, t):
+        """Alpha function of the diffusion model."""
         return t * self.beta_min + 0.5 * t**2 * (self.beta_max - self.beta_min)
 
     def mean_factor(self, t):
+        """Mean factor of the diffusion model."""
         return jnp.exp(-0.5 * self.alpha_t(t))
 
     def var(self, t):
+        """Variance of the diffusion model."""
         return 1 - jnp.exp(-self.alpha_t(t))
 
     def drift(self, x, t):
+        """Drift of the diffusion model."""
         return -0.5 * self.beta_t(t) * x
 
     def dispersion(self, t):
+        """Dispersion of the diffusion model."""
         return jnp.sqrt(self.beta_t(t))
 
     @partial(jit, static_argnums=[0, 2])
     def reverse_sde(self, initial_samples, score):
+        """Run the reverse SDE.
+
+        Args:
+            initial_samples (jnp.ndarray): Samples to run the model on.
+            score (callable): Score function.
+
+        Returns:
+            Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
+        """
+
         def f(carry, params):
             t, dt = params
             x, rng = carry
@@ -78,6 +108,14 @@ class DiffusionModelBase(object):
         return x, x_t
 
     def sample_prior(self, n):
+        """Sample from the prior distribution.
+
+        Args:
+            n (int): Number of samples to draw.
+
+        Returns:
+            jnp.ndarray: Samples from the prior distribution.
+        """
         if self.prior:
             return self.prior.rvs(n)
         else:
@@ -95,15 +133,24 @@ class DiffusionModelBase(object):
 
 
 class DiffusionModel(DiffusionModelBase):
+    """Extends the base diffusion model to include neural networks to approximate the score."""
+
     def __init__(self, *args, **kwargs):
+        """Initialise the diffusion model."""
         super(DiffusionModel, self).__init__(*args, **kwargs)
         self.state = None
 
     def score_model(self):
+        """Score model for training the diffusion model.
+
+        nb: Due to idosyncrocies in flax relating to batchnorm this can be replaced by any flax.linen.nn,
+        but it must have BatchNorm layers (even if they are not used).
+        """
         return ScoreApprox()
 
     @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):
+        """Loss function for training the diffusion model."""
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
         t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
@@ -126,6 +173,7 @@ class DiffusionModel(DiffusionModelBase):
         return loss, updates
 
     def _train(self, data, **kwargs):
+        """Internal wrapping of training loop."""
         batch_size = kwargs.get("batch_size", 128)
         n_epochs = kwargs.get("n_epochs", 1000)
 
@@ -168,6 +216,7 @@ class DiffusionModel(DiffusionModelBase):
                 tepochs.set_postfix(loss=mean_loss)
 
     def _init_state(self, **kwargs):
+        """Initialise the state of the training."""
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
@@ -186,6 +235,17 @@ class DiffusionModel(DiffusionModelBase):
         )
 
     def train(self, data, **kwargs):
+        """Train the diffusion model on the provided data.
+
+        Args:
+            data (jnp.ndarray): Data to train on.
+
+        Keyword Args:
+            restart (bool): If True, reinitialise the model before training. Defaults to False.
+            batch_size (int): Size of the training batches. Defaults to 128.
+            n_epochs (int): Number of training epochs. Defaults to 1000.
+            lr (float): Learning rate. Defaults to 1e-3.
+        """
         restart = kwargs.get("restart", False)
         self.ndims = data.shape[-1]
         # data = self.chains.sample(200).to_numpy()[..., :-3]
@@ -204,6 +264,18 @@ class DiffusionModel(DiffusionModelBase):
         )
 
     def predict(self, initial_samples, **kwargs):
+        """Run the diffusion model on user-provided samples.
+
+        Args:
+            initial_samples (jnp.ndarray): Samples to run the model on.
+
+        Keyword Args:
+            history (bool): If True, return the history of the process as well as the outpute (tuple).
+                Defaults to False.
+
+        Returns:
+            jnp.ndarray: Samples from the posterior distribution.
+        """
         hist = kwargs.get("history", False)
         x, x_t = self.reverse_sde(initial_samples, self._predict)
         if hist:
@@ -218,7 +290,7 @@ class DiffusionModel(DiffusionModelBase):
             n (int): Number of samples to draw.
 
         Keyword Args:
-            history (bool): If True, return the history of the samples.
+            history (bool):  return the history of the process as well as the outpute (tuple).
                 Defaults to False.
 
         Returns:
