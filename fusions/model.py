@@ -7,8 +7,6 @@ import jax.random as random
 import optax
 from jax import grad, jit, vmap
 from jax.lax import scan
-from jax.scipy.special import logsumexp
-from jax.scipy.stats import norm
 from tqdm import tqdm
 from scipy.stats import norm
 
@@ -137,9 +135,9 @@ class DiffusionModel(DiffusionModelBase):
 
         @jit
         def update_step(state, batch, batch_prior, rng):
-            (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
-                state.params, batch, batch_prior, state.batch_stats, rng
-            )
+            (val, updates), grads = jax.value_and_grad(
+                self.loss, has_aux=True
+            )(state.params, batch, batch_prior, state.batch_stats, rng)
             state = state.apply_gradients(grads=grads)
             state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
@@ -168,7 +166,9 @@ class DiffusionModel(DiffusionModelBase):
 
                 batch_prior = prior_samples[perm, :]
                 self.rng, step_rng = random.split(self.rng)
-                loss, self.state = update_step(self.state, batch, batch_prior, step_rng)
+                loss, self.state = update_step(
+                    self.state, batch, batch_prior, step_rng
+                )
                 losses.append(loss)
             if (k + 1) % 100 == 0:
                 mean_loss = jnp.mean(jnp.array(losses))
@@ -179,7 +179,9 @@ class DiffusionModel(DiffusionModelBase):
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
-        _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
+        _params = self.score_model().init(
+            self.rng, dummy_x, dummy_t, train=False
+        )
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
