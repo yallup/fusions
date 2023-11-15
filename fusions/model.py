@@ -7,24 +7,24 @@ import jax.random as random
 import optax
 from jax import grad, jit, vmap
 from jax.lax import scan
-from jax.scipy.special import logsumexp
-from tqdm import tqdm
 from scipy.stats import norm
+from tqdm import tqdm
 
 from fusions.network import ScoreApprox, TrainState
 
 
 class DiffusionModelBase(object):
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, prior=None, **kwargs) -> None:
         self.chains = None
         self.steps = kwargs.get("steps", 1000)
         # beta_t = jnp.linspace(0.001, 1, self.steps)
         self.beta_min = 1e-3
-        self.beta_max = 1
+        self.beta_max = 3
         self.rng = random.PRNGKey(2022)
         R = self.steps
         self.train_ts = jnp.arange(1, R) / (R - 1)
-        # self.train_ts = jnp.linspace(self.beta_min, self.beta_max, self.steps)
+        # self.prior=norm(0,1)
+        self.prior = prior
         self.ndims = None
 
     # def prior(self):
@@ -44,9 +44,7 @@ class DiffusionModelBase(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_t(self, t):
-        return t * self.beta_min + 0.5 * t**2 * (
-            self.beta_max - self.beta_min
-        )
+        return t * self.beta_min + 0.5 * t**2 * (self.beta_max - self.beta_min)
 
     def mean_factor(self, t):
         return jnp.exp(-0.5 * self.alpha_t(t))
@@ -79,6 +77,16 @@ class DiffusionModelBase(object):
         (x, _), (x_t, _) = scan(f, (initial_samples, rng), params)
         return x, x_t
 
+    def sample_prior(self, n):
+        if self.prior:
+            return self.prior.rvs(n)
+        else:
+            self.rng, step_rng = random.split(self.rng)
+            return random.normal(step_rng, (n, self.ndims))
+
+    def sample_posterior(self, n, **kwargs):
+        raise NotImplementedError
+
     # def log_hat_pt(self, data, x, t):
     #     means = data * self.mean_factor(t)
     #     v = self.var(t)
@@ -95,17 +103,16 @@ class DiffusionModel(DiffusionModelBase):
         return ScoreApprox()
 
     @partial(jit, static_argnums=[0])
-    def loss(self, params, batch, batch_stats, rng):
+    def loss(self, params, batch, batch_prior, batch_stats, rng):
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
-        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (
-            self.steps - 1
-        )
+        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
         mean_coeff = self.mean_factor(t)
         vs = self.var(t)
         stds = jnp.sqrt(vs)
         rng, step_rng = random.split(rng)
-        noise = random.normal(step_rng, batch.shape)
+
+        noise = batch_prior + random.normal(step_rng, batch.shape)
         xt = batch * mean_coeff + noise * stds
         output, updates = self.state.apply_fn(
             {"params": params, "batch_stats": batch_stats},
@@ -123,15 +130,21 @@ class DiffusionModel(DiffusionModelBase):
         n_epochs = kwargs.get("n_epochs", 1000)
 
         @jit
-        def update_step(state, batch, rng):
-            (val, updates), grads = jax.value_and_grad(
-                self.loss, has_aux=True
-            )(state.params, batch, state.batch_stats, rng)
+        def update_step(state, batch, batch_prior, rng):
+            (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
+                state.params, batch, batch_prior, state.batch_stats, rng
+            )
             state = state.apply_gradients(grads=grads)
             state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
 
         train_size = data.shape[0]
+
+        if self.prior:
+            prior_samples = jnp.array(self.prior.rvs(train_size))
+        else:
+            prior_samples = jnp.zeros_like(data)
+
         batch_size = min(batch_size, train_size)
 
         steps_per_epoch = train_size // batch_size
@@ -140,26 +153,25 @@ class DiffusionModel(DiffusionModelBase):
         for k in tepochs:
             self.rng, step_rng = random.split(self.rng)
             perms = jax.random.permutation(step_rng, train_size)
-            perms = perms[
-                : steps_per_epoch * batch_size
-            ]  # skip incomplete batch
+            perms = perms[: steps_per_epoch * batch_size]  # skip incomplete batch
             perms = perms.reshape((steps_per_epoch, batch_size))
             for perm in perms:
                 batch = data[perm, :]
+
+                batch_prior = prior_samples[perm, :]
                 self.rng, step_rng = random.split(self.rng)
-                loss, self.state = update_step(self.state, batch, step_rng)
+                loss, self.state = update_step(self.state, batch, batch_prior, step_rng)
                 losses.append(loss)
             if (k + 1) % 100 == 0:
                 mean_loss = jnp.mean(jnp.array(losses))
+                self.state.losses.append((mean_loss, k))
                 tepochs.set_postfix(loss=mean_loss)
 
     def _init_state(self, **kwargs):
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
-        _params = self.score_model().init(
-            self.rng, dummy_x, dummy_t, train=False
-        )
+        _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -170,12 +182,14 @@ class DiffusionModel(DiffusionModelBase):
             params=params,
             batch_stats=batch_stats,
             tx=optimizer,
+            losses=[],
         )
 
     def train(self, data, **kwargs):
+        restart = kwargs.get("restart", False)
         self.ndims = data.shape[-1]
         # data = self.chains.sample(200).to_numpy()[..., :-3]
-        if not self.state:
+        if (not self.state) | restart:
             self._init_state(**kwargs)
 
         self._train(data, **kwargs)
@@ -189,5 +203,36 @@ class DiffusionModel(DiffusionModelBase):
             train=False,
         )
 
-    def predict(self, initial_samples):
-        return self.reverse_sde(initial_samples, self._predict)
+    def predict(self, initial_samples, **kwargs):
+        hist = kwargs.get("history", False)
+        x, x_t = self.reverse_sde(initial_samples, self._predict)
+        if hist:
+            return x, x_t
+        else:
+            return x
+
+    def sample_posterior(self, n, **kwargs):
+        """Draw samples from the posterior distribution.
+
+        Args:
+            n (int): Number of samples to draw.
+
+        Keyword Args:
+            history (bool): If True, return the history of the samples.
+                Defaults to False.
+
+        Returns:
+            jnp.ndarray: Samples from the posterior distribution.
+        """
+        return self.predict(self.sample_prior(n), **kwargs)
+
+    def rvs(self, n):
+        """Alias for sample_posterior.
+
+        Args:
+            n (int): Number of samples to draw.
+
+        Returns:
+            jnp.ndarray: Samples from the posterior distribution.
+        """
+        return self.sample_posterior(n)
