@@ -10,6 +10,7 @@ from jax.lax import scan
 from jax.scipy.special import logsumexp
 from jax.scipy.stats import norm
 from tqdm import tqdm
+from scipy.stats import norm
 
 from fusions.network import ScoreApprox, TrainState
 
@@ -26,7 +27,6 @@ class DiffusionModelBase(object):
         self.train_ts = jnp.arange(1, R) / (R - 1)
         # self.prior=norm(0,1)
         self.prior = prior
-        # self.train_ts = jnp.linspace(self.beta_min, self.beta_max, self.steps)
         self.ndims = None
 
     # def prior(self):
@@ -46,7 +46,9 @@ class DiffusionModelBase(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_t(self, t):
-        return t * self.beta_min + 0.5 * t**2 * (self.beta_max - self.beta_min)
+        return t * self.beta_min + 0.5 * t**2 * (
+            self.beta_max - self.beta_min
+        )
 
     def mean_factor(self, t):
         return jnp.exp(-0.5 * self.alpha_t(t))
@@ -108,7 +110,9 @@ class DiffusionModel(DiffusionModelBase):
     def loss(self, params, batch, batch_prior, batch_stats, rng):
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
-        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
+        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (
+            self.steps - 1
+        )
         mean_coeff = self.mean_factor(t)
         vs = self.var(t)
         stds = jnp.sqrt(vs)
@@ -141,10 +145,12 @@ class DiffusionModel(DiffusionModelBase):
             return val, state
 
         train_size = data.shape[0]
+
         if self.prior:
             prior_samples = jnp.array(self.prior.rvs(train_size))
         else:
             prior_samples = jnp.zeros_like(data)
+
         batch_size = min(batch_size, train_size)
 
         steps_per_epoch = train_size // batch_size
@@ -153,10 +159,13 @@ class DiffusionModel(DiffusionModelBase):
         for k in tepochs:
             self.rng, step_rng = random.split(self.rng)
             perms = jax.random.permutation(step_rng, train_size)
-            perms = perms[: steps_per_epoch * batch_size]  # skip incomplete batch
+            perms = perms[
+                : steps_per_epoch * batch_size
+            ]  # skip incomplete batch
             perms = perms.reshape((steps_per_epoch, batch_size))
             for perm in perms:
                 batch = data[perm, :]
+
                 batch_prior = prior_samples[perm, :]
                 self.rng, step_rng = random.split(self.rng)
                 loss, self.state = update_step(self.state, batch, batch_prior, step_rng)

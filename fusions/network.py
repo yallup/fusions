@@ -43,6 +43,7 @@ class ScoreApprox(nn.Module):
 
     n_initial: int = 256
     n_hidden: int = 16
+
     act = nn.leaky_relu
 
     @nn.compact
