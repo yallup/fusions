@@ -32,7 +32,7 @@ class TestDiffusionBase(object):
         return jax.random.normal(rng, (10, 2))
 
     def test_read_chains(self, model):
-        model.read_chains(os.path.join(test_path, "data/data"))
+        model._read_chains(os.path.join(test_path, "data/data"))
         assert model.chains is not None
 
     def test_beta_t(self, model, t):
