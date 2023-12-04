@@ -36,8 +36,46 @@ class TrainState(train_state.TrainState):
     batch_stats: Any
     losses: Any
 
+def zeros_init(key, shape, dtype=jnp.float32):
+    return jnp.zeros(shape, dtype)
 
 class ScoreApprox(nn.Module):
+    """A simple model with multiple fully connected layers and some fourier features for the time variable."""
+
+    n_initial: int = 256
+    n_hidden: int = 256
+
+    act = nn.leaky_relu
+
+    @nn.compact
+    def __call__(self, x, t, train: bool):
+        in_size = x.shape[-1]
+        # act = nn.relu
+        # # t = jnp.concatenate([t - 0.5, jnp.cos(2 * jnp.pi * t)], axis=1)
+        t = jnp.concatenate(
+            [
+                t - 0.5,
+                jnp.cos(2 * jnp.pi * t),
+                jnp.sin(2 * jnp.pi * t),
+                -jnp.cos(4 * jnp.pi * t),
+            ],
+            axis=-1,
+        )
+        x = jnp.concatenate([x, t], axis=-1)
+        x = nn.Dense(self.n_initial)(x)
+        x = nn.BatchNorm(use_running_average=not train)(x)
+        x = nn.silu(x)
+        x = nn.Dense(self.n_hidden)(x)
+        x = nn.BatchNorm(use_running_average=not train)(x)
+        x = nn.silu(x)
+        x = nn.Dense(self.n_hidden)(x)
+        x = nn.BatchNorm(use_running_average=not train)(x)
+        x = nn.silu(x)
+        x = nn.Dense(in_size,kernel_init=zeros_init)(x)
+        return x
+
+
+class ScorePriorApprox(nn.Module):
     """A simple model with multiple fully connected layers and some fourier features for the time variable."""
 
     n_initial: int = 256
@@ -46,7 +84,7 @@ class ScoreApprox(nn.Module):
     act = nn.leaky_relu
 
     @nn.compact
-    def __call__(self, x, t, train: bool):
+    def __call__(self, x, pi, t, train: bool, condition: bool = False):
         in_size = x.shape[1]
         # act = nn.relu
         # t = jnp.concatenate([t - 0.5, jnp.cos(2 * jnp.pi * t)], axis=1)
@@ -69,43 +107,36 @@ class ScoreApprox(nn.Module):
         x = nn.Dense(self.n_hidden)(x)
         x = nn.BatchNorm(use_running_average=not train)(x)
         x = nn.relu(x)
+        # x = nn.Dense(in_size)(x)
+        # x = nn.relu(x)
+        # x=nn.Dense(in_size)(x)
+        if condition:
+            y = PiCondition()(pi)
+        else:
+            y=jnp.zeros_like(pi)
+
+        x = jnp.concatenate([x, y], axis=1)
+        # x = nn.Dense(in_size)(x)
+        # y = nn.relu(y)
         x = nn.Dense(in_size)(x)
         return x
 
 
-class ScorePriorApprox(nn.Module):
-    """A simple model with multiple fully connected layers and some fourier features for the time variable."""
-
+class PiCondition(nn.Module):
     n_initial: int = 256
-    n_hidden: int = 128
-
-    act = nn.leaky_relu
+    n_hidden: int = 16
 
     @nn.compact
-    def __call__(self, x, pi, t, train: bool):
+    def __call__(self, x):  # 
         in_size = x.shape[1]
-        # act = nn.relu
-        # t = jnp.concatenate([t - 0.5, jnp.cos(2 * jnp.pi * t)], axis=1)
-        t = jnp.concatenate(
-            [
-                t - 0.5,
-                jnp.cos(2 * jnp.pi * t),
-                jnp.sin(2 * jnp.pi * t),
-                -jnp.cos(4 * jnp.pi * t),
-            ],
-            axis=1,
-        )
-        x = jnp.concatenate([x, pi, t], axis=1)
-        x = nn.Dense(self.n_initial)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.relu(x)
-        x = nn.Dense(self.n_hidden)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.relu(x)
-        x = nn.Dense(self.n_hidden)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.relu(x)
-        x = nn.Dense(in_size)(x)
+        x = nn.sigmoid(x)
+        # x = nn.Dense(self.n_initial)(x)
+        # x = nn.relu(x)
+        # x = nn.Dense(self.n_hidden)(x)
+        # x = nn.relu(x)
+        # x = nn.Dense(self.n_hidden)(x)
+        # x = nn.relu(x)
+        # x = nn.Dense(in_size)(x)
         return x
 
 

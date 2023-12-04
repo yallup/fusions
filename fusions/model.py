@@ -60,7 +60,9 @@ class DiffusionModelBase(object):
 
     def alpha_t(self, t):
         """Alpha function of the diffusion model."""
-        return t * self.beta_min + 0.5 * t**2 * (self.beta_max - self.beta_min)
+        return t * self.beta_min + 0.5 * t**2 * (
+            self.beta_max - self.beta_min
+        )
 
     def sample_ts(self, n):
         return n
@@ -156,7 +158,9 @@ class DiffusionModel(DiffusionModelBase):
         """Loss function for training the diffusion model."""
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
-        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
+        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (
+            self.steps - 1
+        )
         mean_coeff = self.mean_factor(t)
         vs = self.var(t)
         stds = jnp.sqrt(vs)
@@ -182,9 +186,9 @@ class DiffusionModel(DiffusionModelBase):
 
         @jit
         def update_step(state, batch, batch_prior, rng):
-            (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
-                state.params, batch, batch_prior, state.batch_stats, rng
-            )
+            (val, updates), grads = jax.value_and_grad(
+                self.loss, has_aux=True
+            )(state.params, batch, batch_prior, state.batch_stats, rng)
             state = state.apply_gradients(grads=grads)
             state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
@@ -204,14 +208,18 @@ class DiffusionModel(DiffusionModelBase):
         for k in tepochs:
             self.rng, step_rng = random.split(self.rng)
             perms = jax.random.permutation(step_rng, train_size)
-            perms = perms[: steps_per_epoch * batch_size]  # skip incomplete batch
+            perms = perms[
+                : steps_per_epoch * batch_size
+            ]  # skip incomplete batch
             perms = perms.reshape((steps_per_epoch, batch_size))
             for perm in perms:
                 batch = data[perm, :]
 
                 batch_prior = prior_samples[perm, :]
                 self.rng, step_rng = random.split(self.rng)
-                loss, self.state = update_step(self.state, batch, batch_prior, step_rng)
+                loss, self.state = update_step(
+                    self.state, batch, batch_prior, step_rng
+                )
                 losses.append(loss)
             if (k + 1) % 100 == 0:
                 mean_loss = jnp.mean(jnp.array(losses))
@@ -223,7 +231,9 @@ class DiffusionModel(DiffusionModelBase):
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
-        _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
+        _params = self.score_model().init(
+            self.rng, dummy_x, dummy_t, train=False
+        )
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -313,6 +323,7 @@ class DiffusionModel(DiffusionModelBase):
         return self.sample_posterior(n)
 
 
+
 class NestedDiffusionModel(DiffusionModel):
     def __init__(self, samples: ns.NestedSamples, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -355,7 +366,9 @@ class NestedDiffusionModel(DiffusionModel):
             rng, step_rng = jax.random.split(rng)
             disp = self.dispersion(1 - t)
             t = jnp.ones((x.shape[0], 1)) * t
-            drift = -self.drift(x, 1 - t) + disp**2 * score(x, initial_samples, 1 - t)
+            drift = -self.drift(x, 1 - t) + disp**2 * score(
+                x, initial_samples, 1 - t
+            )
             noise = random.normal(step_rng, x.shape)
             x = x + dt * drift + jnp.sqrt(dt) * disp * noise
             return (x, rng), (carry)
@@ -371,7 +384,9 @@ class NestedDiffusionModel(DiffusionModel):
         """Loss function for training the diffusion model."""
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
-        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
+        t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (
+            self.steps - 1
+        )
         mean_coeff = self.mean_factor(t)
         vs = self.var(t)
         stds = jnp.sqrt(vs)
@@ -386,6 +401,7 @@ class NestedDiffusionModel(DiffusionModel):
             t,
             train=True,
             mutable=["batch_stats"],
+            condition=True,
         )
 
         loss = jnp.mean((noise + output * stds) ** 2)
@@ -398,11 +414,11 @@ class NestedDiffusionModel(DiffusionModel):
         beta_prior = kwargs.get("beta_prior", 0.0)
         beta_posterior = kwargs.get("beta_posterior", 1.0)
 
-        @jit
+        # @jit
         def update_step(state, batch, batch_prior, rng):
-            (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
-                state.params, batch, batch_prior, state.batch_stats, rng
-            )
+            (val, updates), grads = jax.value_and_grad(
+                self.loss, has_aux=True
+            )(state.params, batch, batch_prior, state.batch_stats, rng)
             state = state.apply_gradients(grads=grads)
             state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
@@ -411,7 +427,9 @@ class NestedDiffusionModel(DiffusionModel):
         tepochs = tqdm(range(n_epochs))
         for k in tepochs:
             prior = (
-                self.chains.set_beta(beta_prior).sample(batch_size).to_numpy()[..., :-3]
+                self.chains.set_beta(beta_prior)
+                .sample(batch_size)
+                .to_numpy()[..., :-3]
             )
             post = (
                 self.chains.set_beta(beta_posterior)
@@ -453,6 +471,7 @@ class NestedDiffusionModel(DiffusionModel):
             pi,
             t,
             train=False,
+            condition=True
         )
 
     def sample_prior(self, n):
@@ -472,7 +491,7 @@ class NestedDiffusionModel(DiffusionModel):
         dummy_t = jnp.ones((1, 1))
 
         _params = self.score_model().init(
-            self.rng, dummy_x, dummy_x, dummy_t, train=False
+            self.rng, dummy_x, dummy_x, dummy_t, train=False, condition=True
         )
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
