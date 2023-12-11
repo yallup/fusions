@@ -1,17 +1,22 @@
 from functools import partial
 
 import anesthetic as ns
+import diffrax as dfx
+import distrax
 import jax
 import jax.numpy as jnp
 import jax.random as random
 import optax
+from diffrax.saveat import SaveAt
 from jax import grad, jit, vmap
 from jax.lax import scan
+from ott.geometry import pointcloud
+from ott.solvers import linear, was_solver
 from scipy.stats import norm
 from tqdm import tqdm
-import diffrax as dfx
-import distrax
-from fusions.network import ScoreApprox, ScorePriorApprox, TrainState
+
+from fusions.network import ScoreApprox, ScoreApproxCNN, ScorePriorApprox, TrainState
+from fusions.optimal_transport import OTMap
 
 
 class CFMBase(object):
@@ -35,7 +40,7 @@ class CFMBase(object):
         self.ndims = None
         self.rng = random.PRNGKey(2022)
         self.state = None
-        self.sigma=0.1
+        self.sigma = 0.1
 
     # def prior(self):
 
@@ -79,9 +84,12 @@ class CFMBase(object):
         Returns:
             jnp.ndarray: Samples from the posterior distribution.
         """
-        # hist = kwargs.get("history", False)
-        x = self.reverse_sde(initial_samples, self._predict)
-        return x
+        hist = kwargs.get("history", False)
+        x, xt = self.reverse_sde(initial_samples, self._predict)
+        if hist:
+            return x, xt
+        else:
+            return x
 
     def sample_posterior(self, n, **kwargs):
         return self.predict(self.sample_prior(n), **kwargs)
@@ -93,6 +101,7 @@ class CFMBase(object):
         but it must have BatchNorm layers (even if they are not used).
         """
         return ScoreApprox()
+        # return ScoreApproxCNN()
 
     @partial(jit, static_argnums=[0, 2])
     def reverse_sde(self, initial_samples, score):
@@ -107,6 +116,7 @@ class CFMBase(object):
         """
         rng, step_rng = random.split(self.rng)
         t0, t1, dt0 = 0.0, 1.0, 1e-3
+        ts = jnp.linspace(t0, t1, 10)
 
         def f(x):
             # return score(x, jnp.atleast_1d(t))
@@ -116,24 +126,40 @@ class CFMBase(object):
             term = dfx.ODETerm(score_args)
             solver = dfx.Heun()
             # solver = dfx.Dopri5()
-            sol = dfx.diffeqsolve(term, solver, t0, t1, dt0, x)
-            (y,) = sol.ys
-            return y
+            sol = dfx.diffeqsolve(
+                term, solver, t0, t1, dt0, x, saveat=SaveAt(t1=True, ts=ts)
+            )
+            return sol.ys
+            # return y
 
-        y = vmap(f)(initial_samples)
+        yt = vmap(f)(initial_samples)
         # scan(f, initial_samples)
-        return y
+        return yt[:, -1, :], yt
+
+    def _ot_map(self, x0, x1):
+        geom = pointcloud.PointCloud(x0, x1)
 
     # @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):
         """Loss function for training the diffusion model."""
         rng, step_rng = random.split(rng)
-        sigma_min = 1e-2
+        sigma_min = 0.0  # 1e-2
         N_batch = batch.shape[0]
         t = random.uniform(step_rng, (N_batch, 1))
+
+        # geom = pointcloud.PointCloud(batch_prior, batch)
+        # A = linear.solve(geom)
+        # idx = jnp.argmax(A.matrix, axis=-1)
+        # x0 = batch_prior[idx]
+
+        x0 = batch_prior
+        x1 = batch
         # batch_prior = random.normal(step_rng, (N_batch, self.ndims))
         noise = random.normal(step_rng, (N_batch, self.ndims))
-        psi_0 = (1 - (1 - sigma_min) * t) * batch + batch_prior * t  + self.sigma * noise
+        # x0 = x0+ 1e-3 *noise
+        noise_1 = random.normal(step_rng, (N_batch, self.ndims))
+        # x1 = x1+ 1e-3 *noise_1
+        psi_0 = (1 - (1 - sigma_min) * t) * x1 + (x0) * t + 0.1 * noise
         output, updates = self.state.apply_fn(
             {"params": params, "batch_stats": batch_stats},
             psi_0,
@@ -141,7 +167,7 @@ class CFMBase(object):
             train=True,
             mutable=["batch_stats"],
         )
-        psi = (1 - sigma_min) * batch - ( batch_prior ) # +  self.sigma * noise)
+        psi = (1 - sigma_min) * x1 - (x0)  # +  self.sigma * noise)
         loss = jnp.mean((output - psi) ** 2)
         return loss, updates
 
@@ -152,9 +178,9 @@ class CFMBase(object):
 
         @jit
         def update_step(state, batch, batch_prior, rng):
-            (val, updates), grads = jax.value_and_grad(
-                self.loss, has_aux=True
-            )(state.params, batch, batch_prior, state.batch_stats, rng)
+            (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
+                state.params, batch, batch_prior, state.batch_stats, rng
+            )
             state = state.apply_gradients(grads=grads)
             state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
@@ -170,36 +196,48 @@ class CFMBase(object):
 
         steps_per_epoch = train_size // batch_size
         losses = []
+        ot_map = OTMap(prior_samples, data)
         tepochs = tqdm(range(n_epochs))
         for k in tepochs:
             self.rng, step_rng = random.split(self.rng)
-            perms = jax.random.permutation(step_rng, train_size)
-            perms = perms[
-                : steps_per_epoch * batch_size
-            ]  # skip incomplete batch
-            perms = perms.reshape((steps_per_epoch, batch_size))
-            for perm in perms:
-                batch = data[perm, :]
+            perm_prior, perm = ot_map.sample_flat(step_rng, train_size, batch_size)
+            # perm_prior, perm = ot_map.sample_np(step_rng, batch_size)
+            # perm_prior, perm = ot_map.sample_matrix(step_rng, batch_size)
+            # if (k + 1) % 1 == 0:
+            #     perm_prior, perm = ot_map.sample_flat(step_rng, batch_size)
+            # else:
+            #     perm_prior, perm = ot_map.sample_np(step_rng,batch_size=batch_size)
+            batch = data[perm, :]
+            batch_prior = prior_samples[perm_prior, :]
+            # batch_prior = jnp.array(self.prior.rvs(batch_size))
+            loss, self.state = update_step(self.state, batch, batch_prior, step_rng)
+            losses.append(loss)
+            # perms = jax.random.permutation(step_rng, train_size)
+            # perms = perms[
+            #     : steps_per_epoch * batch_size
+            # ]  # skip incomplete batch
+            # perms = perms.reshape((steps_per_epoch, batch_size))
 
-                batch_prior = prior_samples[perm, :]
-                self.rng, step_rng = random.split(self.rng)
-                loss, self.state = update_step(
-                    self.state, batch, batch_prior, step_rng
-                )
-                losses.append(loss)
-            if (k + 1) % 100 == 0:
-                mean_loss = jnp.mean(jnp.array(losses))
-                self.state.losses.append((mean_loss, k))
-                tepochs.set_postfix(loss=mean_loss)
+            # for perm in perms:
+            #     batch = data[perm, :]
+
+            #     batch_prior = prior_samples[perm, :]
+            #     self.rng, step_rng = random.split(self.rng)
+            #     loss, self.state = update_step(
+            #         self.state, batch, batch_prior, step_rng
+            #     )
+            # losses.append(loss)
+            # if (k + 1) % 100 == 0:
+            #     mean_loss = jnp.mean(jnp.array(losses))
+            #     self.state.losses.append((mean_loss, k))
+            #     tepochs.set_postfix(loss=mean_loss)
 
     def _init_state(self, **kwargs):
         """Initialise the state of the training."""
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
-        _params = self.score_model().init(
-            self.rng, dummy_x, dummy_t, train=False
-        )
+        _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -241,3 +279,14 @@ class CFMBase(object):
             t,
             train=False,
         )
+
+    def rvs(self, n):
+        """Alias for sample_posterior.
+
+        Args:
+            n (int): Number of samples to draw.
+
+        Returns:
+            jnp.ndarray: Samples from the posterior distribution.
+        """
+        return self.sample_posterior(n)
