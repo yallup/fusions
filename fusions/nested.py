@@ -1,6 +1,7 @@
 import logging
 
-from fusions.cfm import CFMBase
+from fusions.cfm import CFM
+from fusions.diffusion import Diffusion
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -8,9 +9,11 @@ logging.basicConfig(level=logging.INFO)
 import os
 from dataclasses import dataclass, field
 
+import jax
 import matplotlib.pyplot as plt
 import numpy as np
 from anesthetic import NestedSamples
+from scipy.special import logsumexp
 from tqdm import tqdm
 
 os.makedirs("plots", exist_ok=True)
@@ -30,7 +33,7 @@ class Stats:
     ndead: int = field(default=0)
     logz: float = field(default=-1e30)
     logz_err: float = field(default=1)
-    logX: float = field(default=1)
+    logX: float = field(default=0)
 
     def __repr__(self):
         return (
@@ -71,8 +74,6 @@ class NestedDiffusion(object):
         logl_birth = np.ones_like(logl) * logl_birth
         points = [Point(x[i], logl[i], logl_birth[i]) for i in range(x.shape[0])]
         return points
-        # Sort the list by the logl attribute
-        # self.live_points = sorted(live_points, key=lambda lp: lp.logl)
 
     def sample_constrained(self, n, dist, constraint, efficiency=0.1):
         success = []
@@ -89,47 +90,44 @@ class NestedDiffusion(object):
 
     def stash(self, points, n):
         live = sorted(points, key=lambda lp: lp.logl)
+
         self.dead += live[:-n]
         self.last_live = live[:-n]
-        # self.stats.logX -= -len(live[:-n]) / self.stats.nlive
+        contour = live[n].logl
         live = live[-n:]
-        # reduce the runtime volume estimate by exp(-1/n)
-        # self.stats.logX -= -1 / n
-        return live, live[0].logl
-
-    # def terminate(self, points):
-
-    # def compress(n):
-    #     i = 0
-    #     while i < n:
+        return live, contour
 
     def run(self, n=1000, target_eff=0.1, steps=None, eps=-3):
         self.stats.nlive = n
-        live = self.sample(n * 5, self.prior, self.logzero)
+        live = self.sample(n * 2, self.prior, self.logzero)
         step = 0
         logger.info("Done sampling prior")
         live, contour = self.stash(live, n)
 
         while step < steps:
+            # if self.stats.logX<-3:
+            #     self.stash(live, -len(live))
+            #     logger.info("Precision reached, terminating")
+            #     break
             self.update_stats(live, n)
-            logger.info(self.stats)
+            logger.info(f"\r{self.stats}")
             success, eff, points = self.sample_constrained(
                 n, self.prior, contour, efficiency=target_eff
             )
             if success:
                 live, contour = self.stash(live + points, n)
-                # plot_points(live)
-                # plt.savefig(f"plots/step_{step}.pdf")
-                # plt.close()
-                logger.info(f"Efficiency at: {eff}, using previous diffusion")
+                step += 1
+                logger.info(f"\rEfficiency at: {eff}, using previous diffusion")
 
             if not (success):
-                logger.info(f"Efficiency dropped to: {eff}, training new diffusion")
-                diffuser = CFMBase(self.prior)
+                logger.info(f"\rEfficiency dropped to: {eff}, training new diffusion")
+                # diffuser = CFM(self.prior)
+                diffuser = Diffusion(self.prior)
+                # with jax.disable_jit():
                 diffuser.train(
                     np.asarray([yi.x for yi in live + points]),
-                    n_epochs=2000,
-                    batch_size=n // 4,
+                    n_epochs=500,
+                    batch_size=n // 2,
                     lr=1e-3,
                 )
                 live += points
@@ -139,21 +137,23 @@ class NestedDiffusion(object):
                 self.prior = diffuser
 
             logger.info(f"Step {step}/{steps} complete")
-            step += 1
 
         # mean_logl = np.mean([p.logl for p in live])
         # average_live = lambda x: x.logl = mean_logl
         # live = [average_live(p) for p in live]
-        self.stash(live, -1)
+        self.stash(live, -len(live))
         print("done")
 
     def update_stats(self, live, n):
         running_samples = self.points_to_samples(self.dead + live)
+        live_samples = self.points_to_samples(live)
         self.stats.ndead = len(self.dead)
         lZs = running_samples.logZ(100)
-        self.stats.logX = -len([x.logl_birth > self.logzero for x in self.dead]) / (
-            self.stats.nlive
-        )
+        # self.stats.logX = -np.asarray(
+        #     [(x.logl_birth > self.logzero) for x in self.dead]
+        # ).sum() / (self.stats.nlive)
+        # self.stats.logX = live_samples.logZ() - running_samples.logZ()
+        self.stats.logX = logsumexp(live_samples.logX() * live_samples.logL)
         self.stats.logz = lZs.mean()
         self.stats.logz_err = lZs.std()
 

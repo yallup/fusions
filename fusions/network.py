@@ -65,11 +65,11 @@ class ScoreApprox(nn.Module):
         )
         x = jnp.concatenate([x, t], axis=-1)
         x = nn.Dense(self.n_initial)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
+        x_ = nn.BatchNorm(use_running_average=not train)(x)
         x = nn.silu(x)
         for i in range(self.n_layers):
             x = nn.Dense(self.n_hidden)(x)
-            x = nn.BatchNorm(use_running_average=not train)(x)
+            # x = nn.BatchNorm(use_running_average=not train)(x)
             x = nn.silu(x)
         x = nn.Dense(in_size, kernel_init=zeros_init)(x)
         # x = nn.Dense(self.n_hidden)(x)
@@ -101,12 +101,6 @@ class ScoreApproxCNN(nn.Module):
                 jnp.cos(2 * jnp.pi * t),
                 jnp.sin(2 * jnp.pi * t),
                 -jnp.cos(4 * jnp.pi * t),
-                jnp.sin(4 * jnp.pi * t),
-                jnp.cos(8 * jnp.pi * t),
-                jnp.sin(8 * jnp.pi * t),
-                -jnp.cos(16 * jnp.pi * t),
-                jnp.sin(16 * jnp.pi * t),
-                jnp.cos(32 * jnp.pi * t),
             ],
             axis=-1,
         )
