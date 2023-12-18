@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "fusions"
-version = "0.3.0"
-description = "Diffusion meets nested sampling"
+version = "0.4.0"
+description = "Diffusion meets sampling"
 authors = ["David Yallup <david.yallup@gmail.com>"]
 readme = "README.md"
 

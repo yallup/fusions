@@ -137,7 +137,7 @@ class Model(ABC):
 
     def _init_state(self, **kwargs):
         """Initialise the state of the training."""
-        prev_params = kwargs.get("params", None)
+        # prev_params = kwargs.get("params", None)
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 

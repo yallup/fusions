@@ -4,18 +4,25 @@ import numpy as np
 
 # import jax.random as rng
 from lsbi.model import LinearMixtureModel, LinearModel
+from margarine.clustered import clusterMAF
+from margarine.maf import MAF
 from scipy.stats import multivariate_normal, uniform
 
-from fusions.nested import NestedDiffusion, SequentialDiffusion
+from fusions.cfm import CFM
+from fusions.diffusion import Diffusion
+from fusions.integrate import NestedDiffusion, SequentialDiffusion
 
-dims = 10
-true_theta = np.ones(dims) + 1
-Model = LinearModel(
-    mu=np.zeros(dims),
-    sigma=np.eye(dims),
-    m=np.zeros(dims),
-    C=np.eye(dims) * 0.01,
-)
+dims = 5
+true_theta = np.ones(dims)
+
+# Model = LinearModel(
+#     mu=np.zeros(dims),
+#     sigma=np.eye(dims),
+#     m=np.zeros(dims),
+#     C=np.eye(dims) * 0.01,
+# )
+np.random.seed(5)
+
 mixtures = 2
 A = np.random.randn(mixtures, dims, dims)
 Model = LinearMixtureModel(
@@ -26,6 +33,7 @@ Model = LinearMixtureModel(
     m=np.zeros(dims),
     C=np.eye(dims) * 0.1,
 )
+
 # 1 prior samples
 theta = Model.prior().rvs(200)
 # evaluate the likelihood
@@ -36,25 +44,25 @@ P = Model.posterior(true_theta).rvs(200)
 logz = Model.evidence().logpdf(true_theta)
 print(logz)
 
-
-class prior(object):
-    def rvs(self, n):
-        return uniform.rvs(-5, 10, size=(n, dims))
-
-
+# prior = multivariate_normal(mean=np.zeros(dims), cov=np.eye(dims))
 diffuser = SequentialDiffusion(
-    prior=Model.prior(), likelihood=Model.likelihood(true_theta)
+    prior=Model.prior(), likelihood=Model.posterior(true_theta)
 )
-# diffuser = SequentialDiffusion(prior=prior(), likelihood=Model.likelihood(true_theta))
-diffuser.run(steps=20, n=500, target_eff=0.1)
+
+# diffuser = NestedDiffusion(
+#     prior=Model.prior(), likelihood=Model.posterior(true_theta)
+# )
+
+diffuser.run(steps=10, n=1000, target_eff=0.1)
+
 samples = diffuser.samples()
 
 
-print(logz)
+# print(logz)
 # print(samples.logZ())
 # print(samples.logZ(30).std())
 total_samples = len(samples.compress())
-size = 1000
+size = total_samples
 theta = Model.prior().rvs(size)
 P = Model.posterior(true_theta).rvs(size)
 a = ns.MCMCSamples(theta).plot_2d(np.arange(dims))
@@ -67,8 +75,6 @@ plt.legend()
 f.savefig("plots/ns.pdf")
 plt.close()
 
-from fusions.cfm import CFM
-from fusions.diffusion import Diffusion
 
 flow = Diffusion(Model.prior())
 flow.train(Model.posterior(true_theta).rvs(10000), n_epochs=10000)
