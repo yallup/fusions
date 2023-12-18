@@ -27,7 +27,7 @@ class Model(ABC):
         self.state = None
 
     @abstractmethod
-    def reverse_process(self, initial_samples, score):
+    def reverse_process(self, initial_samples, score, rng):
         pass
 
     def sample_prior(self, n):
@@ -59,7 +59,8 @@ class Model(ABC):
             jnp.ndarray: Samples from the posterior distribution.
         """
         hist = kwargs.get("history", False)
-        x, x_t = self.reverse_process(initial_samples, self._predict)
+        self.rng, step_rng = random.split(self.rng)
+        x, x_t = self.reverse_process(initial_samples, self._predict, step_rng)
         if hist:
             return x, x_t
         else:
@@ -78,13 +79,14 @@ class Model(ABC):
         Returns:
             jnp.ndarray: Samples from the posterior distribution.
         """
-        return self.predict(self.sample_prior(n), **kwargs)
+        self.rng, step_rng = random.split(self.rng)
+        return self.predict(self.sample_prior(n), rng=step_rng, **kwargs)
 
     def score_model(self):
         """Score model for training the diffusion model."""
         return ScoreApprox()
 
-    def rvs(self, n):
+    def rvs(self, n, **kwargs):
         """Alias for sample_posterior.
 
         Args:
@@ -93,7 +95,7 @@ class Model(ABC):
         Returns:
             jnp.ndarray: Samples from the posterior distribution.
         """
-        return self.sample_posterior(n)
+        return self.sample_posterior(n, **kwargs)
 
     def _train(self, data, **kwargs):
         """Internal wrapping of training loop."""
@@ -135,10 +137,13 @@ class Model(ABC):
 
     def _init_state(self, **kwargs):
         """Initialise the state of the training."""
+        prev_params = kwargs.get("params", None)
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
 
         _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
+        # if prev_params:
+        #     _params["params"] = _params.replace(params=prev_params)
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -174,7 +179,9 @@ class Model(ABC):
         # data = self.chains.sample(200).to_numpy()[..., :-3]
         if (not self.state) | restart:
             self._init_state(**kwargs)
-
+        # self._init_state=self._init_state.replace(grads=jax.tree_map(jnp.zeros_like, self._init_state.params))
+        # self.state.params.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
+        # self.state.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
         self._train(data, **kwargs)
         self._predict = lambda x, t: self.state.apply_fn(
             {

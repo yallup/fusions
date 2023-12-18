@@ -20,7 +20,7 @@ class CFM(Model):
     """Continuous Flows Model."""
 
     @partial(jit, static_argnums=[0, 2])
-    def reverse_process(self, initial_samples, score):
+    def reverse_process(self, initial_samples, score, rng):
         """Run the reverse ODE.
 
         Args:
@@ -57,24 +57,24 @@ class CFM(Model):
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
 
-        t = random.uniform(step_rng, (N_batch, 1))
+        # t = random.uniform(step_rng, (N_batch, 1))
         # t = (t) ** (1 / alpha)
-        # top_n = 5
-        # t = random.uniform(step_rng, (N_batch * top_n, 1))
+        top_n = 5
+        t = random.uniform(step_rng, (N_batch * top_n, 1))
 
         # minibatch ot
-        # geom = pointcloud.PointCloud(batch_prior, batch)
-        # A = linear.solve(geom)
-        # _, idx = jax.lax.top_k(A.matrix, top_n)
+        geom = pointcloud.PointCloud(batch_prior, batch)
+        A = linear.solve(geom)
+        _, idx = jax.lax.top_k(A.matrix, top_n)
 
         # idx = jnp.argmax(A.matrix, axis=-1)
-        # x0 = batch_prior[idx].reshape(-1, batch.shape[-1])
+        x0 = batch_prior[idx].reshape(-1, batch.shape[-1])
         # t = t.reshape(-1, 1)
-        x0 = batch_prior
+        # x0 = batch_prior
         x1 = batch
-        # x1 = jnp.stack([x1 for i in range(top_n)]).reshape(-1, batch.shape[-1])
+        x1 = jnp.stack([x1 for i in range(top_n)]).reshape(-1, batch.shape[-1])
         # batch_prior = random.normal(step_rng, (N_batch, self.ndims))
-        noise = random.normal(step_rng, (N_batch, self.ndims))
+        noise = random.normal(step_rng, (N_batch * top_n, self.ndims))
         # x0 = x0+ 1e-3 *noise
         # noise_1 = random.normal(step_rng, (N_batch, self.ndims))
         # x1 = x1+ 1e-3 *noise_1

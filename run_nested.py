@@ -6,18 +6,21 @@ import numpy as np
 from lsbi.model import LinearMixtureModel, LinearModel
 from scipy.stats import multivariate_normal, uniform
 
-from fusions.nested import NestedDiffusion
+from fusions.nested import NestedDiffusion, SequentialDiffusion
 
-dims = 5
+dims = 10
 true_theta = np.ones(dims) + 1
 Model = LinearModel(
     mu=np.zeros(dims),
     sigma=np.eye(dims),
     m=np.zeros(dims),
-    C=np.eye(dims) * 0.1,
+    C=np.eye(dims) * 0.01,
 )
+mixtures = 2
+A = np.random.randn(mixtures, dims, dims)
 Model = LinearMixtureModel(
-    M=np.stack([np.eye(dims), -np.eye(dims)]),
+    # M=np.stack([np.eye(dims), -np.eye(dims)]),
+    M=A,
     mu=np.zeros(dims),
     sigma=np.eye(dims),
     m=np.zeros(dims),
@@ -33,13 +36,23 @@ P = Model.posterior(true_theta).rvs(200)
 logz = Model.evidence().logpdf(true_theta)
 print(logz)
 
-diffuser = NestedDiffusion(prior=Model.prior(), likelihood=Model.likelihood(true_theta))
-diffuser.run(steps=20, n=500)
+
+class prior(object):
+    def rvs(self, n):
+        return uniform.rvs(-5, 10, size=(n, dims))
+
+
+diffuser = SequentialDiffusion(
+    prior=Model.prior(), likelihood=Model.likelihood(true_theta)
+)
+# diffuser = SequentialDiffusion(prior=prior(), likelihood=Model.likelihood(true_theta))
+diffuser.run(steps=20, n=500, target_eff=0.1)
 samples = diffuser.samples()
 
 
 print(logz)
-print(samples.logZ())
+# print(samples.logZ())
+# print(samples.logZ(30).std())
 total_samples = len(samples.compress())
 size = 1000
 theta = Model.prior().rvs(size)
@@ -58,7 +71,7 @@ from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
 
 flow = Diffusion(Model.prior())
-flow.train(Model.posterior(true_theta).rvs(10000))
+flow.train(Model.posterior(true_theta).rvs(10000), n_epochs=10000)
 P_flow = flow.sample_posterior(1000)
 
 from margarine.clustered import clusterMAF
