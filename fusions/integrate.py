@@ -134,7 +134,7 @@ class NestedDiffusion(Integrator):
 
             if not (success):
                 logger.info(f"Efficiency dropped to: {eff}, training new diffusion")
-                diffuser = Diffusion(self.prior)
+                # diffuser = Diffusion(self.prior)
                 diffuser.train(
                     np.asarray([yi.x for yi in live + points]),
                     n_epochs=len(live),

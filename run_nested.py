@@ -12,27 +12,31 @@ from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
 from fusions.integrate import NestedDiffusion, SequentialDiffusion
 
+import os
+
+os.makedirs("plots", exist_ok=True)
+
 dims = 5
 true_theta = np.ones(dims)
 
-# Model = LinearModel(
-#     mu=np.zeros(dims),
-#     sigma=np.eye(dims),
-#     m=np.zeros(dims),
-#     C=np.eye(dims) * 0.01,
-# )
-np.random.seed(5)
-
-mixtures = 2
-A = np.random.randn(mixtures, dims, dims)
-Model = LinearMixtureModel(
-    # M=np.stack([np.eye(dims), -np.eye(dims)]),
-    M=A,
+Model = LinearModel(
     mu=np.zeros(dims),
     sigma=np.eye(dims),
     m=np.zeros(dims),
-    C=np.eye(dims) * 0.1,
+    C=np.eye(dims) * 0.01,
 )
+np.random.seed(5)
+
+mixtures = 4
+A = np.random.randn(mixtures, dims, dims)
+# Model = LinearMixtureModel(
+#     # M=np.stack([np.eye(dims), -np.eye(dims)]),
+#     M=A,
+#     mu=np.zeros(dims),
+#     sigma=np.eye(dims),
+#     m=np.zeros(dims),
+#     C=np.eye(dims) * 0.1,
+# )
 
 # 1 prior samples
 theta = Model.prior().rvs(200)
@@ -45,22 +49,23 @@ logz = Model.evidence().logpdf(true_theta)
 print(logz)
 
 # prior = multivariate_normal(mean=np.zeros(dims), cov=np.eye(dims))
-diffuser = SequentialDiffusion(
-    prior=Model.prior(), likelihood=Model.posterior(true_theta)
-)
-
-# diffuser = NestedDiffusion(
-#     prior=Model.prior(), likelihood=Model.posterior(true_theta)
+# diffuser = SequentialDiffusion(
+#     prior=Model.prior(), likelihood=Model.likelihood(true_theta)
 # )
 
-diffuser.run(steps=10, n=1000, target_eff=0.1)
+diffuser = NestedDiffusion(
+    prior=Model.prior(), likelihood=Model.likelihood(true_theta)
+)
+
+diffuser.run(steps=20, n=500, target_eff=0.1)
 
 samples = diffuser.samples()
 
 
-# print(logz)
-# print(samples.logZ())
-# print(samples.logZ(30).std())
+print(logz)
+print(samples.logZ())
+print(samples.logZ(30).std())
+
 total_samples = len(samples.compress())
 size = total_samples
 theta = Model.prior().rvs(size)
