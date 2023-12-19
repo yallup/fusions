@@ -1,3 +1,5 @@
+import os
+
 import anesthetic as ns
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,8 +13,6 @@ from scipy.stats import multivariate_normal, uniform
 from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
 from fusions.integrate import NestedDiffusion, SequentialDiffusion
-
-import os
 
 os.makedirs("plots", exist_ok=True)
 
@@ -53,9 +53,7 @@ print(logz)
 #     prior=Model.prior(), likelihood=Model.likelihood(true_theta)
 # )
 
-diffuser = NestedDiffusion(
-    prior=Model.prior(), likelihood=Model.likelihood(true_theta)
-)
+diffuser = NestedDiffusion(prior=Model.prior(), likelihood=Model.likelihood(true_theta))
 
 diffuser.run(steps=20, n=500, target_eff=0.1)
 
