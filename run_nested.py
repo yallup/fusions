@@ -12,68 +12,92 @@ from scipy.stats import multivariate_normal, uniform
 
 from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
-from fusions.integrate import NestedDiffusion, SequentialDiffusion
+from fusions.integrate import (
+    NestedDiffusion,
+    NestedSequentialDiffusion,
+    SequentialDiffusion,
+)
 
 os.makedirs("plots", exist_ok=True)
 
 dims = 5
-true_theta = np.ones(dims)
-
-Model = LinearModel(
-    mu=np.zeros(dims),
-    sigma=np.eye(dims),
-    m=np.zeros(dims),
-    C=np.eye(dims) * 0.01,
-)
-np.random.seed(5)
-
-mixtures = 4
-A = np.random.randn(mixtures, dims, dims)
-# Model = LinearMixtureModel(
-#     # M=np.stack([np.eye(dims), -np.eye(dims)]),
-#     M=A,
+data_dims = dims
+# true_theta = np.ones(dims)
+# np.random.seed(1)
+# Model = LinearModel(
 #     mu=np.zeros(dims),
 #     sigma=np.eye(dims),
-#     m=np.zeros(dims),
-#     C=np.eye(dims) * 0.1,
+#     m=np.zeros(data_dims),
+#     C=np.eye(data_dims)*0.01,
 # )
+np.random.seed(12)
+
+mixtures = 10
+A = np.random.randn(mixtures, data_dims, dims)
+Model = LinearMixtureModel(
+    # M=np.stack([np.eye(dims), -np.eye(dims)]),
+    M=A,
+    mu=np.zeros(dims),
+    sigma=np.eye(dims),
+    m=np.zeros(data_dims),
+    C=np.eye(data_dims) * 0.1,
+)
 
 # 1 prior samples
-theta = Model.prior().rvs(200)
+# theta = Model.prior().rvs(200)
+true_theta = Model.prior().rvs()
 # evaluate the likelihood
-Model.likelihood(true_theta).logpdf(theta)
+# Model.likelihood(true_theta).logpdf(theta)
 # Analytic posterior samples
-P = Model.posterior(true_theta).rvs(200)
+# data= np.ones(data_dims)
+data = Model.evidence().rvs()
+# P = Model.posterior(true_theta).rvs(200)
 # Evidence value
-logz = Model.evidence().logpdf(true_theta)
-print(logz)
+logz = Model.evidence().logpdf(data)
+# print(logz)
 
 # prior = multivariate_normal(mean=np.zeros(dims), cov=np.eye(dims))
 # diffuser = SequentialDiffusion(
 #     prior=Model.prior(), likelihood=Model.likelihood(true_theta)
 # )
 
-diffuser = NestedDiffusion(prior=Model.prior(), likelihood=Model.likelihood(true_theta))
 
-diffuser.run(steps=20, n=500, target_eff=0.1)
+class likelihood(object):
+    def logpdf(self, x):
+        return np.asarray([Model.likelihood(y).logpdf(data) for y in x])
+
+
+# diffuser = SequentialDiffusion(
+#     prior=Model.prior(), likelihood=likelihood()# , schedule =np.geomspace
+# )
+diffuser = NestedDiffusion(prior=Model.prior(), likelihood=likelihood())
+
+# diffuser = NestedSequentialDiffusion(
+#     prior=Model.prior(), likelihood=likelihood())
+
+
+diffuser.run(steps=10, n=1000, target_eff=0.1)
 
 samples = diffuser.samples()
+# logz_diff = diffuser.importance_integrate(diffuser.dist,10000)
 
-
-print(logz)
+print(f"analytic: {logz:.2f}")
+zs = samples.logZ(50)
+print(f"numerical estimation: {zs.mean():.2f} +- {zs.std():.2f}")
 print(samples.logZ())
 print(samples.logZ(30).std())
 
 total_samples = len(samples.compress())
 size = total_samples
 theta = Model.prior().rvs(size)
-P = Model.posterior(true_theta).rvs(size)
+P = Model.posterior(data).rvs(size)
 a = ns.MCMCSamples(theta).plot_2d(np.arange(dims))
 
 f, a = ns.make_2d_axes(np.arange(dims))
 ns.MCMCSamples(theta).plot_2d(a, alpha=0.3, label="Prior")
 ns.MCMCSamples(P).plot_2d(a, alpha=0.3, label="Analytic")
 samples.plot_2d(a, label="NestedDiffusion")
+# samples.set_beta(0.01).plot_2d(a, label="NestedDiffusion 2", alpha=0.5)
 plt.legend()
 f.savefig("plots/ns.pdf")
 plt.close()

@@ -71,9 +71,12 @@ class Integrator(ABC):
         logl = self.likelihood.logpdf(x) * beta
         self.stats.nlike += n
         logl_birth = np.ones_like(logl) * logl_birth
-        log_pi = self.prior.logpdf(x) * (1.0 - beta)
-        logl += log_pi
-        points = [Point(x[i], logl[i], logl_birth[i]) for i in range(x.shape[0])]
+        log_pi = self.prior.logpdf(x)
+        # logl += log_pi * (1.0 - beta)
+        points = [
+            Point(x[i], logl[i], logl_birth[i], logl_pi=log_pi[i])
+            for i in range(x.shape[0])
+        ]
         return points
 
     def stash(self, points, n):
@@ -97,6 +100,12 @@ class Integrator(ABC):
 
     def samples(self):
         return self.points_to_samples(self.dead)
+
+    def importance_integrate(self, dist, n=1000):
+        points = dist.rvs(n)
+        likelihood = self.likelihood.logpdf(points)
+        prior = self.prior.logpdf(points)
+        return logsumexp(likelihood + prior) - np.log(n)
 
 
 class NestedDiffusion(Integrator):
@@ -137,13 +146,15 @@ class NestedDiffusion(Integrator):
                 # diffuser = Diffusion(self.prior)
                 diffuser.train(
                     np.asarray([yi.x for yi in live + points]),
-                    n_epochs=len(live),
+                    # self.points_to_samples_importance(live + points)
+                    # .compress()
+                    # .to_numpy(),
+                    n_epochs=len(live) * 2,
                     # batch_size=n // 2,
                     batch_size=n // 2,
                     lr=1e-3,
                 )
                 live += points
-
                 self.dists.append(diffuser)
                 # self.prior = diffuser
                 self.dist = diffuser
@@ -173,12 +184,69 @@ class NestedDiffusion(Integrator):
             logL_birth=[p.logl_birth for p in points],
         )
 
+    def points_to_samples_importance(self, points):
+        return MCMCSamples(
+            data=[p.x for p in points],
+            weights=np.exp([p.logl_pi for p in points]),
+        )
+
     def samples(self):
         return self.points_to_samples(self.dead)
 
 
+class NestedSequentialDiffusion(NestedDiffusion):
+    def sample(self, n, dist, logl_birth=0.0, beta=1.0):
+        x = np.asarray(dist.rvs(n))
+        logl = self.likelihood.logpdf(x) * beta
+        self.stats.nlike += n
+        logl_birth = np.ones_like(logl) * logl_birth
+        # log_pi = self.prior.logpdf(x)
+        # logl += log_pi * (1.0 - beta)
+        points = [
+            Point(x[i], logl[i], logl_birth[i])  # , logl_pi=log_pi[i])
+            for i in range(x.shape[0])
+        ]
+        return points
+
+    def run(self, n=1000, target_eff=0.1, steps=20):
+        live = self.sample(n * 2, self.prior, self.logzero)
+        step = 0
+        logger.info("Done sampling prior")
+        live, contour = self.stash(live, n)
+
+        while step < steps:
+            success, eff, points = self.sample_constrained(
+                n, self.prior, contour, efficiency=target_eff
+            )
+            if success:
+                live, contour = self.stash(live + points, n)
+                logger.info(f"Efficiency at: {eff}, using previous diffusion")
+                self.update_stats(live, n)
+                logger.info(f"{self.stats}")
+                step += 1
+
+            if not (success):
+                logger.info(f"Efficiency dropped to: {eff}, training new diffusion")
+                diffuser = CFM(self.prior)
+                diffuser.train(
+                    np.asarray([yi.x for yi in live + points]),
+                    n_epochs=len(live) * 2,
+                    # batch_size=n // 2,
+                    batch_size=n // 2,
+                    lr=1e-3,
+                )
+                live += points
+                self.dists.append(diffuser)
+                self.prior = diffuser
+
+            logger.info(f"Step {step}/{steps} complete")
+
+        self.stash(live, -len(live))
+        logger.info(f"Final stats: {self.stats}")
+
+
 class SequentialDiffusion(Integrator):
-    beta_min = 0.001
+    beta_min = 0.00001
     beta_max = 1.0
 
     def run(self, n=1000, steps=10, schedule=np.linspace, **kwargs):
@@ -201,6 +269,7 @@ class SequentialDiffusion(Integrator):
             logger.info(f"Met ess criteria, training new diffusion")
             # self.points_to_samples(live).plot_2d(np.arange(5))
             # plt.savefig("plots/step_{}.pdf".format(beta_i))
+            diffuser = self.model(self.prior)
             diffuser.train(
                 np.asarray(self.points_to_samples(live).compress()),
                 n_epochs=n,
@@ -213,7 +282,7 @@ class SequentialDiffusion(Integrator):
             self.update_stats(live, n)
             logger.info(f"{self.stats}")
 
-        # self.dead = self.sample(n * 4, self.dist)
+        self.dead = self.sample(n * 4, self.dist)
 
     def update_stats(self, live, n):
         running_samples = self.points_to_samples(self.dead)
