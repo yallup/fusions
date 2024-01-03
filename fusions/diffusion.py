@@ -9,8 +9,8 @@ from fusions.model import Model
 
 
 class Diffusion(Model):
-    beta_min: float = 1e-5
-    beta_max: float = 2.0
+    beta_min: float = 1e-3
+    beta_max: float = 3.0
     steps: int = 1000
     train_ts = jnp.arange(1, steps) / (steps - 1)
     # train_ts=jnp.geomspace(beta_min,beta_max,steps)

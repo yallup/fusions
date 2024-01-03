@@ -5,13 +5,15 @@ import anesthetic as ns
 import jax
 import jax.numpy as jnp
 import jax.random as random
+import numpy as np
 import optax
+from flax import linen as nn
 from jax import grad, jit, vmap
 from jax.lax import scan
 from scipy.stats import norm
 from tqdm import tqdm
 
-from fusions.network import ScoreApprox, ScorePriorApprox, TrainState
+from fusions.network import Classifier, ScoreApprox, ScorePriorApprox, TrainState
 from fusions.optimal_transport import NullOT
 
 
@@ -25,6 +27,7 @@ class Model(ABC):
         self.rng = random.PRNGKey(kwargs.get("seed", 2023))
         self.map = kwargs.get("map", NullOT)
         self.state = None
+        self.calibrate_state = None
 
     @abstractmethod
     def reverse_process(self, initial_samples, score, rng):
@@ -86,6 +89,10 @@ class Model(ABC):
         """Score model for training the diffusion model."""
         return ScoreApprox()
 
+    def classifier_model(self):
+        """Score model for training the diffusion model."""
+        return Classifier()
+
     def rvs(self, n, **kwargs):
         """Alias for sample_posterior.
 
@@ -99,8 +106,8 @@ class Model(ABC):
 
     def _train(self, data, **kwargs):
         """Internal wrapping of training loop."""
-        batch_size = kwargs.get("batch_size", 128)
-        n_epochs = kwargs.get("n_epochs", 1000)
+        batch_size = kwargs.get("batch_size", 256)
+        n_epochs = kwargs.get("n_epochs", 100)
 
         @jit
         def update_step(state, batch, batch_prior, rng):
@@ -135,6 +142,57 @@ class Model(ABC):
             #     self.state.losses.append((mean_loss, k))
             #     tepochs.set_postfix(loss=mean_loss)
 
+    def _train_calibrator(self, data, **kwargs):
+        """Internal wrapping of training loop."""
+        batch_size = kwargs.get("batch_size", 512)
+        n_epochs = kwargs.get("n_epochs", 50)
+
+        @jit
+        def update_step(state, batch, batch_labels, rng):
+            (val, updates), grads = jax.value_and_grad(
+                self.calibrate_loss, has_aux=True
+            )(state.params, batch, batch_labels, state.batch_stats, rng)
+            state = state.apply_gradients(grads=grads)
+            state = state.replace(batch_stats=updates["batch_stats"])
+            return val, state
+
+        train_size = data.shape[0]
+
+        if self.prior:
+            prior_samples = jnp.array(self.prior.rvs(train_size))
+        else:
+            prior_samples = jnp.zeros_like(data)
+
+        batch_size = min(batch_size, train_size)
+        n_batches = train_size // batch_size
+        labels_a = jnp.zeros(prior_samples.shape[0])
+        labels_b = jnp.ones(data.shape[0])
+        labels = jnp.concatenate([labels_a, labels_b])
+        data = jnp.concatenate([prior_samples, data])
+
+        losses = []
+        tepochs = tqdm(range(n_epochs))
+        for k in tepochs:
+            self.rng, step_rng = random.split(self.rng)
+            perm = random.permutation(step_rng, jnp.arange(data.shape[0]))
+            data = data[perm, :]
+            labels = labels[perm]
+
+            for i in range(n_batches):
+                self.rng, step_rng = random.split(self.rng)
+                # Get the indices of the current batch
+                start = i * batch_size
+                end = min(start + batch_size, train_size)
+
+                # Extract the batch from the shuffled data and labels
+                batch = data[start:end, :]
+                batch_labels = labels[start:end]
+
+                loss, self.calibrate_state = update_step(
+                    self.calibrate_state, batch, batch_labels, step_rng
+                )
+                losses.append(loss)
+
     def _init_state(self, **kwargs):
         """Initialise the state of the training."""
         # prev_params = kwargs.get("params", None)
@@ -157,10 +215,42 @@ class Model(ABC):
             losses=[],
         )
 
+    def _init_calibrate_state(self, **kwargs):
+        dummy_x = jnp.zeros((1, self.ndims))
+
+        _params = self.classifier_model().init(self.rng, dummy_x, train=False)
+        lr = kwargs.get("lr", 1e-3)
+        optimizer = optax.adam(lr)
+        params = _params["params"]
+        batch_stats = _params["batch_stats"]
+
+        self.calibrate_state = TrainState.create(
+            apply_fn=self.classifier_model().apply,
+            params=params,
+            batch_stats=batch_stats,
+            tx=optimizer,
+            losses=[],
+        )
+
     @abstractmethod
     def loss(self, params, batch, batch_prior, batch_stats, rng):
         """Loss function for training the diffusion model."""
         pass
+
+    def calibrate_loss(self, params, batch, labels, batch_stats, rng):
+        """Loss function for training the calibrator."""
+        output, updates = self.calibrate_state.apply_fn(
+            {"params": params, "batch_stats": batch_stats},
+            batch,
+            train=True,
+            mutable=["batch_stats"],
+        )
+        # output -= jnp.log(1 / 0.9999 - 1)
+        loss = optax.sigmoid_binary_cross_entropy(output.squeeze(), labels).mean()
+        return loss, updates
+
+    def predict_weight(self, samples, **kwargs):
+        return nn.sigmoid(self._predict_weight(samples, **kwargs))
 
     def train(self, data, **kwargs):
         """Train the diffusion model on the provided data.
@@ -190,6 +280,37 @@ class Model(ABC):
             },
             x,
             t,
+            train=False,
+        )
+
+    def calibrate(self, samples, **kwargs):
+        """Calibrate the model on the provided data.
+
+        Args:
+            samples_a (jnp.ndarray): Samples to train on.
+            samples_b (jnp.ndarray): Samples to train on.
+
+        Keyword Args:
+            restart (bool): If True, reinitialise the model before training. Defaults to False.
+            batch_size (int): Size of the training batches. Defaults to 128.
+            n_epochs (int): Number of training epochs. Defaults to 1000.
+            lr (float): Learning rate. Defaults to 1e-3.
+        """
+        restart = kwargs.get("restart", False)
+        self.ndims = samples.shape[-1]
+        # data = self.chains.sample(200).to_numpy()[..., :-3]
+        if (not self.calibrate_state) | restart:
+            self._init_calibrate_state(**kwargs)
+        # self._init_state=self._init_state.replace(grads=jax.tree_map(jnp.zeros_like, self._init_state.params))
+        # self.state.params.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
+        # self.state.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
+        self._train_calibrator(samples, **kwargs)
+        self._predict_weight = lambda x: self.calibrate_state.apply_fn(
+            {
+                "params": self.calibrate_state.params,
+                "batch_stats": self.calibrate_state.batch_stats,
+            },
+            x,
             train=False,
         )
 

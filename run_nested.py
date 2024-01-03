@@ -16,6 +16,7 @@ from fusions.integrate import (
     NestedDiffusion,
     NestedSequentialDiffusion,
     SequentialDiffusion,
+    SimpleNestedDiffusion,
 )
 
 os.makedirs("plots", exist_ok=True)
@@ -70,15 +71,23 @@ class likelihood(object):
 # diffuser = SequentialDiffusion(
 #     prior=Model.prior(), likelihood=likelihood()# , schedule =np.geomspace
 # )
-diffuser = NestedDiffusion(prior=Model.prior(), likelihood=likelihood())
+diffuser = SimpleNestedDiffusion(prior=Model.prior(), likelihood=likelihood())
 
 # diffuser = NestedSequentialDiffusion(
 #     prior=Model.prior(), likelihood=likelihood())
+# from pypolychord import run_polychord
+# from pypolychord.settings import PolyChordSettings
+# from pypolychord.priors import GaussianPrior
+# def poly_like(theta):
+#     return float(Model.likelihood(theta).logpdf(data)), []
 
+# settings = PolyChordSettings(dims, 0)
+# run_polychord(poly_like,dims,0,prior=GaussianPrior(0,1), settings=settings)
 
-diffuser.run(steps=10, n=1000, target_eff=0.1)
-
+diffuser.run(steps=10, n=5000, target_eff=0.1)
+# samples = ns.read_chains("chains/test")
 samples = diffuser.samples()
+# samples.gui()
 # logz_diff = diffuser.importance_integrate(diffuser.dist,10000)
 
 print(f"analytic: {logz:.2f}")
@@ -88,7 +97,7 @@ print(samples.logZ())
 print(samples.logZ(30).std())
 
 total_samples = len(samples.compress())
-size = total_samples
+size = total_samples * 2
 theta = Model.prior().rvs(size)
 P = Model.posterior(data).rvs(size)
 a = ns.MCMCSamples(theta).plot_2d(np.arange(dims))

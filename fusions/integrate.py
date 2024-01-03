@@ -14,8 +14,11 @@ import jax
 import matplotlib.pyplot as plt
 import numpy as np
 from anesthetic import MCMCSamples, NestedSamples
+from pandas import concat
 from scipy.special import logsumexp
 from tqdm import tqdm
+
+from fusions.model import Model
 
 # os.makedirs("plots", exist_ok=True)
 
@@ -60,28 +63,50 @@ class Integrator(ABC):
     def __init__(self, prior, likelihood, **kwargs) -> None:
         self.prior = prior
         self.likelihood = likelihood
-        self.logzero = kwargs.get("logzero", -1e30)
+        self.logzero = kwargs.get("logzero", -np.inf)
         self.dead = []
         self.dists = []
         self.stats = Stats()
         self.model = kwargs.get("model", Diffusion)
 
-    def sample(self, n, dist, logl_birth=0.0, beta=1.0):
+    def sample(self, n, dist, logl_birth=0.0, beta=1.0, calibrate=False):
         x = np.asarray(dist.rvs(n))
+        if calibrate:
+            c = np.asarray(dist.predict_weight(x)).squeeze()
+            # weights = c / (1-c)
+            weights = 1 / c
+        else:
+            weights = np.ones(x.shape[0])
         logl = self.likelihood.logpdf(x) * beta
         self.stats.nlike += n
         logl_birth = np.ones_like(logl) * logl_birth
         log_pi = self.prior.logpdf(x)
         # logl += log_pi * (1.0 - beta)
+        frame = MCMCSamples(data=x, weights=weights)
+        frame["logl"] = logl
+        frame["logl_birth"] = logl_birth
+        frame["logl_pi"] = log_pi
+
+        frame = frame.compress()
         points = [
-            Point(x[i], logl[i], logl_birth[i], logl_pi=log_pi[i])
-            for i in range(x.shape[0])
+            Point(
+                frame.iloc[ii][np.arange(x.shape[-1])].to_numpy(),
+                logl=frame.iloc[ii].logl,
+                logl_birth=frame.iloc[ii].logl_birth,
+            )
+            for ii in range(len(frame))
         ]
+        # points = [Point()]
+        # points = [
+        #     Point(x[i], logl[i], logl_birth[i], logl_pi=log_pi[i])
+        #     for i in range(x.shape[0])
+        # ]
         return points
 
-    def stash(self, points, n):
+    def stash(self, points, n, drop=False):
         live = sorted(points, key=lambda lp: lp.logl, reverse=True)
-        self.dead += live[n:]
+        if not drop:
+            self.dead += live[n:]
         contour = live[n].logl
         live = live[:n]
         return live, contour
@@ -109,12 +134,12 @@ class Integrator(ABC):
 
 
 class NestedDiffusion(Integrator):
-    def sample_constrained(self, n, dist, constraint, efficiency=0.5):
+    def sample_constrained(self, n, dist, constraint, efficiency=0.5, **kwargs):
         success = []
         trials = 0
         while len(success) < n:
             batch_success = []
-            pi = self.sample(n, dist, constraint)
+            pi = self.sample(n, dist, constraint, **kwargs)
             batch_success += [p for p in pi if p.logl > constraint]
             success += batch_success
             trials += n
@@ -123,24 +148,32 @@ class NestedDiffusion(Integrator):
         return True, len(success) / trials, success
 
     def run(self, n=1000, target_eff=0.1, steps=20):
-        live = self.sample(n * 2, self.prior, self.logzero)
+        live = self.sample(n * 10, self.prior, self.logzero)
         step = 0
         logger.info("Done sampling prior")
-        live, contour = self.stash(live, n)
+        live, contour = self.stash(live, n, drop=False)
         self.dist = self.prior
+        self.update_stats(live, n)
+        logger.info(f"{self.stats}")
         diffuser = self.model(self.prior)
 
         while step < steps:
             success, eff, points = self.sample_constrained(
-                n, self.dist, contour, efficiency=target_eff
+                n,
+                self.dist,
+                contour,
+                efficiency=target_eff,
+                calibrate=isinstance(self.dist, Model),
             )
+            step += 1
+            live, contour = self.stash(live + points, n)
+
             if success:
                 live, contour = self.stash(live + points, n)
                 logger.info(f"Efficiency at: {eff}, using previous diffusion")
-                self.update_stats(live, n)
-                logger.info(f"{self.stats}")
-                step += 1
-
+            self.update_stats(live, n)
+            logger.info(f"{self.stats}")
+            step += 1
             if not (success):
                 logger.info(f"Efficiency dropped to: {eff}, training new diffusion")
                 # diffuser = Diffusion(self.prior)
@@ -149,23 +182,31 @@ class NestedDiffusion(Integrator):
                     # self.points_to_samples_importance(live + points)
                     # .compress()
                     # .to_numpy(),
-                    n_epochs=len(live) * 2,
+                    n_epochs=len(live),
+                    # n_epochs=len(live) * 2,
+                    batch_size=n,
                     # batch_size=n // 2,
-                    batch_size=n // 2,
                     lr=1e-3,
                 )
                 live += points
                 self.dists.append(diffuser)
                 # self.prior = diffuser
                 self.dist = diffuser
+                diffusion_samples = diffuser.rvs(100000)
+                diffuser.calibrate(diffusion_samples)
+                # diffuser.predict_weight(diffusion_samples)
 
+            diffusion_samples = diffuser.rvs(100000)
+            diffuser.calibrate(diffusion_samples)
             logger.info(f"Step {step}/{steps} complete")
 
         self.stash(live, -len(live))
         logger.info(f"Final stats: {self.stats}")
 
     def update_stats(self, live, n):
-        running_samples = self.points_to_samples(self.dead + live)
+        running_samples = self.points_to_samples(self.dead)
+
+        # running_samples = self.points_to_samples(self.dead + live)
         # live_samples = self.points_to_samples(live)
         self.stats.ndead = len(self.dead)
         lZs = running_samples.logZ(100)
@@ -184,14 +225,72 @@ class NestedDiffusion(Integrator):
             logL_birth=[p.logl_birth for p in points],
         )
 
-    def points_to_samples_importance(self, points):
+    def points_to_samples_importance(self, points, weights):
         return MCMCSamples(
             data=[p.x for p in points],
-            weights=np.exp([p.logl_pi for p in points]),
+            weights=weights,
+            # weights=np.exp([p.logl_pi for p in points]),
         )
+
+    def write(self, filename="diffuser", dir="chains"):
+        os.makedirs(dir, exist_ok=True)
 
     def samples(self):
         return self.points_to_samples(self.dead)
+
+
+class SimpleNestedDiffusion(NestedDiffusion):
+    def sample_constrained(self, n, dist, constraint, efficiency=0.5, **kwargs):
+        success = []
+        trials = 0
+        while len(success) < n:
+            batch_success = []
+            pi = self.sample(n, dist, constraint, **kwargs)
+            batch_success += [p for p in pi if p.logl > constraint]
+            success += batch_success
+            trials += n
+        return True, len(success) / trials, success
+
+    def run(self, n=1000, target_eff=0.1, steps=20):
+        live = self.sample(n * 10, self.prior, self.logzero)
+        step = 0
+        logger.info("Done sampling prior")
+        live, contour = self.stash(live, n, drop=False)
+        self.dist = self.prior
+        self.update_stats(live, n)
+        logger.info(f"{self.stats}")
+        diffuser = self.model(self.prior)
+
+        while step < steps:
+            success, eff, points = self.sample_constrained(
+                n,
+                self.dist,
+                contour,
+                efficiency=target_eff,
+                calibrate=isinstance(self.dist, Model),
+            )
+            step += 1
+            live, contour = self.stash(live + points, n)
+            self.update_stats(live, n)
+            logger.info(f"{self.stats}")
+
+            diffuser.train(
+                np.asarray([yi.x for yi in live]),
+                # .to_numpy(),
+                n_epochs=len(live),
+                # n_epochs=len(live) * 2,
+                batch_size=n,
+                # batch_size=n // 2,
+                lr=1e-3,
+            )
+            self.dists.append(diffuser)
+            self.dist = diffuser
+            diffusion_samples = diffuser.rvs(100000)
+            diffuser.calibrate(diffusion_samples)
+            logger.info(f"Step {step}/{steps} complete")
+
+        self.stash(live, -len(live))
+        logger.info(f"Final stats: {self.stats}")
 
 
 class NestedSequentialDiffusion(NestedDiffusion):

@@ -41,6 +41,27 @@ def zeros_init(key, shape, dtype=jnp.float32):
     return jnp.zeros(shape, dtype)
 
 
+class Classifier(nn.Module):
+    """A simple MLP classifier."""
+
+    n_initial: int = 256
+    n_hidden: int = 32
+    n_layers: int = 3
+    act = nn.leaky_relu
+
+    @nn.compact
+    def __call__(self, x, train: bool):
+        x = nn.Dense(self.n_initial)(x)
+        x = nn.BatchNorm(use_running_average=not train)(x)
+        x = nn.silu(x)
+        for i in range(self.n_layers):
+            x = nn.Dense(self.n_hidden)(x)
+            x = nn.BatchNorm(use_running_average=not train)(x)
+            x = nn.silu(x)
+        x = nn.Dense(1)(x)
+        return x
+
+
 class ScoreApprox(nn.Module):
     """A simple model with multiple fully connected layers and some fourier features for the time variable."""
 
