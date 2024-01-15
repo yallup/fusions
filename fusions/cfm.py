@@ -31,7 +31,7 @@ class CFM(Model):
             Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
         """
         t0, t1, dt0 = 0.0, 1.0, 1e-3
-        ts = jnp.linspace(t0, t1, 10)
+        ts = jnp.linspace(t0, t1, 100)
 
         def f(x):
             # return score(x, jnp.atleast_1d(t))
@@ -47,7 +47,7 @@ class CFM(Model):
             return sol.ys
 
         yt = vmap(f)(initial_samples)
-        return yt[:, -1, :], yt
+        return yt[:, -1, :], jnp.moveaxis(yt, 0, 1)
 
     @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):

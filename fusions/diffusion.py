@@ -10,7 +10,7 @@ from fusions.model import Model
 
 class Diffusion(Model):
     beta_min: float = 1e-3
-    beta_max: float = 3.0
+    beta_max: float = 20.0
     steps: int = 1000
     train_ts = jnp.arange(1, steps) / (steps - 1)
     # train_ts=jnp.geomspace(beta_min,beta_max,steps)
@@ -67,7 +67,7 @@ class Diffusion(Model):
             return (x, rng), (carry)
 
         rng, step_rng = random.split(rng)
-        initial_samples = random.normal(rng, initial_samples.shape)
+        # initial_samples = random.normal(rng, initial_samples.shape)
         rng, step_rng = random.split(step_rng)
         dts = self.train_ts[1:] - self.train_ts[:-1]
         params = jnp.stack([self.train_ts[:-1], dts], axis=1)
@@ -86,9 +86,9 @@ class Diffusion(Model):
         vs = self.var(t)
         stds = jnp.sqrt(vs)
         rng, step_rng = random.split(rng)
-
+        noise = batch_prior
         # noise = batch_prior + random.normal(step_rng, batch.shape)
-        noise = random.normal(step_rng, batch.shape)
+        # noise = random.normal(step_rng, batch.shape)
         xt = batch * mean_coeff + noise * stds
         output, updates = self.state.apply_fn(
             {"params": params, "batch_stats": batch_stats},

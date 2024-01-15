@@ -314,6 +314,18 @@ class Model(ABC):
             train=False,
         )
 
+    def langevin_sample(self, x, **kwargs):
+        """given an input x coordinate and a trained score model, use an overdamped langevin to sample from the target"""
+        n_steps = kwargs.get("n_steps", 100)
+        dt = kwargs.get("dt", 1e-2)
+        rng = kwargs.get("rng", random.PRNGKey(2022))
+        rng, step_rng = random.split(rng)
+        for i in range(n_steps):
+            rng, step_rng = random.split(rng)
+            score = self._predict(x, 1.0, rng=step_rng)
+            x = x - dt * score
+        return x
+
 
 class DiffusionModelBase(object):
     """Base class for the diffusion model.

@@ -84,7 +84,7 @@ diffuser = SimpleNestedDiffusion(prior=Model.prior(), likelihood=likelihood())
 # settings = PolyChordSettings(dims, 0)
 # run_polychord(poly_like,dims,0,prior=GaussianPrior(0,1), settings=settings)
 
-diffuser.run(steps=10, n=5000, target_eff=0.1)
+diffuser.run(steps=10, n=500, target_eff=0.1)
 # samples = ns.read_chains("chains/test")
 samples = diffuser.samples()
 # samples.gui()

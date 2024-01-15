@@ -71,36 +71,35 @@ class Integrator(ABC):
 
     def sample(self, n, dist, logl_birth=0.0, beta=1.0, calibrate=False):
         x = np.asarray(dist.rvs(n))
-        if calibrate:
-            c = np.asarray(dist.predict_weight(x)).squeeze()
-            # weights = c / (1-c)
-            weights = 1 / c
-        else:
-            weights = np.ones(x.shape[0])
+        # if calibrate:
+        #     c = np.asarray(dist.predict_weight(x)).squeeze()
+        #     # weights = c / (1-c)
+        #     weights = 1 / c
+        # else:
+        #     weights = np.ones(x.shape[0])
         logl = self.likelihood.logpdf(x) * beta
         self.stats.nlike += n
         logl_birth = np.ones_like(logl) * logl_birth
         log_pi = self.prior.logpdf(x)
         # logl += log_pi * (1.0 - beta)
-        frame = MCMCSamples(data=x, weights=weights)
-        frame["logl"] = logl
-        frame["logl_birth"] = logl_birth
-        frame["logl_pi"] = log_pi
+        # frame = MCMCSamples(data=x, weights=weights)
+        # frame["logl"] = logl
+        # frame["logl_birth"] = logl_birth
+        # frame["logl_pi"] = log_pi
 
-        frame = frame.compress()
-        points = [
-            Point(
-                frame.iloc[ii][np.arange(x.shape[-1])].to_numpy(),
-                logl=frame.iloc[ii].logl,
-                logl_birth=frame.iloc[ii].logl_birth,
-            )
-            for ii in range(len(frame))
-        ]
-        # points = [Point()]
+        # frame = frame.compress()
         # points = [
-        #     Point(x[i], logl[i], logl_birth[i], logl_pi=log_pi[i])
-        #     for i in range(x.shape[0])
+        #     Point(
+        #         frame.iloc[ii][np.arange(x.shape[-1])].to_numpy(),
+        #         logl=frame.iloc[ii].logl,
+        #         logl_birth=frame.iloc[ii].logl_birth,
+        #     )
+        #     for ii in range(len(frame))
         # ]
+        points = [
+            Point(x[i], logl[i], logl_birth[i], logl_pi=log_pi[i])
+            for i in range(x.shape[0])
+        ]
         return points
 
     def stash(self, points, n, drop=False):
@@ -277,16 +276,16 @@ class SimpleNestedDiffusion(NestedDiffusion):
             diffuser.train(
                 np.asarray([yi.x for yi in live]),
                 # .to_numpy(),
-                n_epochs=len(live),
+                n_epochs=len(live) * 10,
                 # n_epochs=len(live) * 2,
-                batch_size=n,
+                batch_size=n // 2,
                 # batch_size=n // 2,
                 lr=1e-3,
             )
             self.dists.append(diffuser)
             self.dist = diffuser
-            diffusion_samples = diffuser.rvs(100000)
-            diffuser.calibrate(diffusion_samples)
+            # diffusion_samples = diffuser.rvs(100000)
+            # diffuser.calibrate(diffusion_samples)
             logger.info(f"Step {step}/{steps} complete")
 
         self.stash(live, -len(live))
