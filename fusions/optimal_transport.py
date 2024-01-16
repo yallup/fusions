@@ -27,6 +27,17 @@ class NullOT(OTBase):
         return idx[..., 0], idx[..., 1]
 
 
+class PriorExtendedNullOT(OTBase):
+    def __init__(self, x0, x1):
+        super().__init__(x0, x1)
+        self.rng = np.random.default_rng(0)
+
+    def sample(self, batch_size=128, *args):
+        idx = self.rng.choice(self.x0.shape[0], size=(batch_size), replace=True)
+        idx_p = self.rng.choice(self.x1.shape[0], size=(batch_size), replace=True)
+        return idx, idx_p
+
+
 class FullOT(OTBase):
     def __init__(self, x0, x1):
         super().__init__(x0, x1)
