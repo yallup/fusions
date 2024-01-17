@@ -1,16 +1,13 @@
 from abc import ABC, abstractmethod
-from functools import partial
 
 import anesthetic as ns
 import jax
 import jax.numpy as jnp
 import jax.random as random
-import numpy as np
 import optax
 from flax import linen as nn
-from jax import grad, jit, vmap
-from jax.lax import scan
-from scipy.stats import norm
+from jax import jit
+from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
 from fusions.network import Classifier, ScoreApprox, ScorePriorApprox, TrainState
@@ -22,9 +19,15 @@ class Model(ABC):
     Base class for models.
     """
 
-    def __init__(self, prior=None, **kwargs) -> None:
+    def __init__(self, prior=None, n=None, **kwargs) -> None:
         self.prior = prior
         self.rng = random.PRNGKey(kwargs.get("seed", 2023))
+        if not self.prior:
+            if not n:
+                raise ValueError("Either prior or n must be specified.")
+            self.rng, step_rng = random.split(self.rng)
+            self.prior = multivariate_normal(jnp.zeros(n))
+
         self.map = kwargs.get("map", NullOT)
         self.state = None
         self.calibrate_state = None
@@ -42,11 +45,7 @@ class Model(ABC):
         Returns:
             jnp.ndarray: Samples from the prior distribution.
         """
-        if self.prior:
-            return self.prior.rvs(n)
-        else:
-            self.rng, step_rng = random.split(self.rng)
-            return random.normal(step_rng, (n, self.ndims))
+        return self.prior.rvs(n)
 
     def predict(self, initial_samples, **kwargs):
         """Run the diffusion model on user-provided samples.
@@ -62,8 +61,10 @@ class Model(ABC):
             jnp.ndarray: Samples from the posterior distribution.
         """
         hist = kwargs.get("history", False)
-        self.rng, step_rng = random.split(self.rng)
-        x, x_t = self.reverse_process(initial_samples, self._predict, step_rng)
+        # self.rng, step_rng = random.split(self.rng)
+        x, x_t = self.reverse_process(
+            initial_samples, self._predict, self.rng
+        )  # , step_rng)
         if hist:
             return x, x_t
         else:
@@ -120,20 +121,7 @@ class Model(ABC):
 
         train_size = data.shape[0]
 
-        # if self.prior:
-        #     prior_samples = jnp.array(self.prior.rvs(train_size * n_epochs))
-        # else:
-        #     self.rng, step_rng = random.split(self.rng)
-        #     prior_samples = random.normal(
-        #         step_rng, (data.shape[0] * n_epochs, data.shape[1])
-        # )
-        # prior_samples = jnp.zeros_like(data)
-        if self.prior:
-            prior_samples = jnp.array(self.prior.rvs(train_size))
-        else:
-            self.rng, step_rng = random.split(self.rng)
-            prior_samples = random.normal(step_rng, data.shape)
-
+        prior_samples = jnp.array(self.prior.rvs(train_size))
         batch_size = min(batch_size, train_size)
 
         losses = []
@@ -254,7 +242,7 @@ class Model(ABC):
             train=True,
             mutable=["batch_stats"],
         )
-        # output -= jnp.log(1 / 0.9999 - 1)
+
         loss = optax.sigmoid_binary_cross_entropy(output.squeeze(), labels).mean()
         return loss, updates
 
@@ -275,6 +263,10 @@ class Model(ABC):
         """
         restart = kwargs.get("restart", False)
         self.ndims = data.shape[-1]
+        if not self.prior:
+            self.prior = multivariate_normal(
+                key=random.PRNGKey(0), mean=jnp.zeros(self.ndims)
+            )
         # data = self.chains.sample(200).to_numpy()[..., :-3]
         if (not self.state) | restart:
             self._init_state(**kwargs)

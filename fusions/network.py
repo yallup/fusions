@@ -86,124 +86,13 @@ class ScoreApprox(nn.Module):
         )
         x = jnp.concatenate([x, t], axis=-1)
         x = nn.Dense(self.n_initial)(x)
-        x_ = nn.BatchNorm(use_running_average=not train)(x)
+        x = nn.BatchNorm(use_running_average=not train)(x)
         x = nn.silu(x)
         for i in range(self.n_layers):
             x = nn.Dense(self.n_hidden)(x)
-            # x = nn.BatchNorm(use_running_average=not train)(x)
+            x = nn.BatchNorm(use_running_average=not train)(x)
             x = nn.silu(x)
         x = nn.Dense(in_size, kernel_init=zeros_init)(x)
-        # x = nn.Dense(self.n_hidden)(x)
-        # x = nn.BatchNorm(use_running_average=not train)(x)
-        # x = nn.silu(x)
-        # x = nn.Dense(self.n_hidden)(x)
-        # x = nn.BatchNorm(use_running_average=not train)(x)
-        # x = nn.silu(x)
-        # x = nn.Dense(in_size,kernel_init=zeros_init)(x)
-        return x
-
-
-class ScoreApproxCNN(nn.Module):
-    """A simple model with CNN"""
-
-    n_initial: int = 64
-    n_hidden: int = 16
-    n_layers: int = 3
-    act = nn.leaky_relu
-
-    @nn.compact
-    def __call__(self, x, t, train: bool):
-        in_size = x.shape[-1]
-        # act = nn.relu
-        # # t = jnp.concatenate([t - 0.5, jnp.cos(2 * jnp.pi * t)], axis=1)
-        t = jnp.concatenate(
-            [
-                t - 0.5,
-                jnp.cos(2 * jnp.pi * t),
-                jnp.sin(2 * jnp.pi * t),
-                -jnp.cos(4 * jnp.pi * t),
-            ],
-            axis=-1,
-        )
-        x = jnp.concatenate([x, t], axis=-1)
-        x = nn.Conv(features=32, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
-
-        x = nn.Conv(features=64, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
-
-        x = x.reshape((x.shape[0], -1))  # flatten
-        x = nn.Dense(features=256)(x)
-        x = nn.relu(x)
-
-        x = nn.Dense(features=in_size)(x)  # number of classes
-        return x
-
-
-class ScorePriorApprox(nn.Module):
-    """A simple model with multiple fully connected layers and some fourier features for the time variable."""
-
-    n_initial: int = 256
-    n_hidden: int = 16
-
-    act = nn.leaky_relu
-
-    @nn.compact
-    def __call__(self, x, pi, t, train: bool, condition: bool = False):
-        in_size = x.shape[1]
-        # act = nn.relu
-        # t = jnp.concatenate([t - 0.5, jnp.cos(2 * jnp.pi * t)], axis=1)
-        t = jnp.concatenate(
-            [
-                t - 0.5,
-                jnp.cos(2 * jnp.pi * t),
-                jnp.sin(2 * jnp.pi * t),
-                -jnp.cos(4 * jnp.pi * t),
-            ],
-            axis=1,
-        )
-        x = jnp.concatenate([x, t], axis=1)
-        x = nn.Dense(self.n_initial)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.relu(x)
-        x = nn.Dense(self.n_hidden)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.relu(x)
-        x = nn.Dense(self.n_hidden)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.relu(x)
-        # x = nn.Dense(in_size)(x)
-        # x = nn.relu(x)
-        # x=nn.Dense(in_size)(x)
-        if condition:
-            y = PiCondition()(pi)
-        else:
-            y = jnp.zeros_like(pi)
-
-        x = jnp.concatenate([x, y], axis=1)
-        # x = nn.Dense(in_size)(x)
-        # y = nn.relu(y)
-        x = nn.Dense(in_size)(x)
-        return x
-
-
-class PiCondition(nn.Module):
-    n_initial: int = 256
-    n_hidden: int = 16
-
-    @nn.compact
-    def __call__(self, x):  #
-        in_size = x.shape[1]
-        x = nn.sigmoid(x)
-        # x = nn.Dense(self.n_initial)(x)
-        # x = nn.relu(x)
-        # x = nn.Dense(self.n_hidden)(x)
-        # x = nn.relu(x)
-        # x = nn.Dense(self.n_hidden)(x)
-        # x = nn.relu(x)
-        # x = nn.Dense(in_size)(x)
         return x
 
 
