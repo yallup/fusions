@@ -1,17 +1,10 @@
-import os
 from functools import partial
-from multiprocessing import Pool
 
-import anesthetic as ns
 import diffrax as dfx
-import jax
 import jax.numpy as jnp
 import jax.random as random
-import optax
 from diffrax.saveat import SaveAt
 from jax import grad, jit, pmap, vmap
-from ott.geometry import pointcloud
-from ott.solvers import linear
 
 from fusions.model import Model
 

@@ -10,7 +10,7 @@ from jax import jit
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
-from fusions.network import Classifier, ScoreApprox, ScorePriorApprox, TrainState
+from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
 
 

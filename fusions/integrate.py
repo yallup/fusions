@@ -10,17 +10,12 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-import jax
-import matplotlib.pyplot as plt
 import numpy as np
 from anesthetic import MCMCSamples, NestedSamples
-from pandas import concat
 from scipy.special import logsumexp
 from tqdm import tqdm
 
 from fusions.model import Model
-
-# os.makedirs("plots", exist_ok=True)
 
 
 @dataclass
@@ -191,12 +186,12 @@ class NestedDiffusion(Integrator):
                 self.dists.append(diffuser)
                 # self.prior = diffuser
                 self.dist = diffuser
-                diffusion_samples = diffuser.rvs(100000)
-                diffuser.calibrate(diffusion_samples)
-                # diffuser.predict_weight(diffusion_samples)
+                # diffusion_samples = diffuser.rvs(100000)
+                # diffuser.calibrate(diffusion_samples)
+                # # diffuser.predict_weight(diffusion_samples)
 
-            diffusion_samples = diffuser.rvs(100000)
-            diffuser.calibrate(diffusion_samples)
+            # diffusion_samples = diffuser.rvs(100000)
+            # diffuser.calibrate(diffusion_samples)
             logger.info(f"Step {step}/{steps} complete")
 
         self.stash(live, -len(live))

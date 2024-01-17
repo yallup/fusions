@@ -71,7 +71,8 @@ class likelihood(object):
 # diffuser = SequentialDiffusion(
 #     prior=Model.prior(), likelihood=likelihood()# , schedule =np.geomspace
 # )
-diffuser = SimpleNestedDiffusion(prior=Model.prior(), likelihood=likelihood())
+# diffuser = SimpleNestedDiffusion(prior=Model.prior(), likelihood=likelihood())
+diffuser = NestedDiffusion(prior=Model.prior(), likelihood=likelihood(), model=CFM)
 
 # diffuser = NestedSequentialDiffusion(
 #     prior=Model.prior(), likelihood=likelihood())
@@ -113,16 +114,16 @@ plt.close()
 
 
 flow = Diffusion(Model.prior())
-flow.train(Model.posterior(true_theta).rvs(10000), n_epochs=10000)
+flow.train(Model.posterior(true_theta).rvs(1000), n_epochs=1000)
 P_flow = flow.sample_posterior(1000)
 
 from margarine.clustered import clusterMAF
 from margarine.maf import MAF
 
-mflow = MAF(Model.posterior(true_theta).rvs(10000))
+mflow = MAF(Model.posterior(true_theta).rvs(1000))
 mflow.train()
 P_mflow = mflow.sample(500)
-cmflow = clusterMAF(Model.posterior(true_theta).rvs(10000))
+cmflow = clusterMAF(Model.posterior(true_theta).rvs(1000))
 cmflow.train()
 P_cmflow = cmflow.sample(500)
 

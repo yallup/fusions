@@ -1,9 +1,7 @@
 from functools import partial
 
-import diffrax as dfx
 import jax
 import jax.numpy as jnp
-from diffrax.saveat import SaveAt
 from jax import grad, jit, random, vmap
 from jax.lax import scan
 
