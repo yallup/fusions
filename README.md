@@ -6,8 +6,17 @@
 
 Diffusion meets (nested) sampling
 
-A miniminal implementation of generative diffusion models in JAX (Flax). Tuned for usage in building emulators for scientific models, particularly where MCMC sampling is tractable and used.
+A miniminal implementation of diffusion models in JAX (Flax). Tuned for usage in building emulators for scientific models, particularly where MCMC sampling is tractable and used.
 
+
+## Quickstart
+
+Install `fusions` and `lsbi` from pypi  
+```
+pip install lsbi fusions
+```
+
+create a 5D sampling problem then train a flow matched model to approximate the posterior
 
 ```python
 from fusions.cfm import CFM
