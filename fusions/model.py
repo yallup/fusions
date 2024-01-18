@@ -108,7 +108,7 @@ class Model(ABC):
     def _train(self, data, **kwargs):
         """Internal wrapping of training loop."""
         batch_size = kwargs.get("batch_size", 256)
-        n_epochs = kwargs.get("n_epochs", 100)
+        n_epochs = kwargs.get("n_epochs", data.shape[0])
 
         @jit
         def update_step(state, batch, batch_prior, rng):
