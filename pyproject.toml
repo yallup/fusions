@@ -13,8 +13,6 @@ pytest = "^7.3"
 tqdm = "^4.62.0"
 torch = "^2.1.0"
 diffrax = "^0.4.0"
-distrax = "^0.1.5"
-lsbi = "^0.11.0"
 
 
 # Testing related dependencies - optional
