@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
-from jax import numpy as jnp
-from jax import random
 from ott.geometry import pointcloud
 from ott.solvers import linear
+
+from jax import numpy as jnp
+from jax import random
 
 
 class OTBase(ABC):

@@ -1,17 +1,17 @@
 from abc import ABC, abstractmethod
 
 import anesthetic as ns
-import jax
-import jax.numpy as jnp
-import jax.random as random
 import optax
 from flax import linen as nn
-from jax import jit
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
+import jax
+import jax.numpy as jnp
+import jax.random as random
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
+from jax import jit
 
 
 class Model(ABC):
@@ -108,7 +108,7 @@ class Model(ABC):
     def _train(self, data, **kwargs):
         """Internal wrapping of training loop."""
         batch_size = kwargs.get("batch_size", 256)
-        n_epochs = kwargs.get("n_epochs", 100)
+        n_epochs = kwargs.get("n_epochs", data.shape[0])
 
         @jit
         def update_step(state, batch, batch_prior, rng):
