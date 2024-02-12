@@ -1,12 +1,12 @@
 from functools import partial
 
 import diffrax as dfx
+from diffrax.saveat import SaveAt
+
 import jax.numpy as jnp
 import jax.random as random
-from diffrax.saveat import SaveAt
-from jax import grad, jit, pmap, vmap
-
 from fusions.model import Model
+from jax import grad, jit, pmap, vmap
 
 
 class CFM(Model):
