@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fusions"
-version = "0.4.0"
+version = "0.4.1"
 description = "Diffusion meets sampling"
 authors = ["David Yallup <david.yallup@gmail.com>"]
 readme = "README.md"
