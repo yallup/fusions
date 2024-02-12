@@ -4,25 +4,10 @@ from functools import partial
 import diffrax as dfx
 from diffrax.saveat import SaveAt
 
-import jax
 import jax.numpy as jnp
 import jax.random as random
 from fusions.model import Model
-from jax import grad, jit, pmap, vjp, vmap
-
-
-def normal_log_likelihood(y):
-    return -0.5 * (y.size * math.log(2 * math.pi) + jnp.sum(y**2))
-
-
-# def approx_logp_wrapper(t, y, args):
-#     # y, _ = y
-#     *args, eps, func = args
-#     fn = lambda y: func(t, y, args)
-#     f, vjp_fn = vjp(fn, y)
-#     (eps_dfdy,) = vjp_fn(eps)
-#     logp = jnp.sum(eps_dfdy * eps)
-#     return f, logp
+from jax import grad, jit, pmap, vmap
 
 
 class CFM(Model):
