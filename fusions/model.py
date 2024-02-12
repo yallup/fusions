@@ -1,17 +1,26 @@
 from abc import ABC, abstractmethod
 
 import anesthetic as ns
-import jax
-import jax.numpy as jnp
-import jax.random as random
 import optax
 from flax import linen as nn
-from jax import jit
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
+import jax
+import jax.numpy as jnp
+import jax.random as random
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
+from jax import jit
+
+# def approx_logp_wrapper(t, y, args):
+#     y, _ = y
+#     *args, eps, func = args
+#     fn = lambda y: func(t, y, args)
+#     f, vjp_fn = jax.vjp(fn, y)
+#     (eps_dfdy,) = vjp_fn(eps)
+#     logp = jnp.sum(eps_dfdy * eps)
+#     return f, logp
 
 
 class Model(ABC):
