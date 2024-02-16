@@ -7,41 +7,80 @@ from diffrax.saveat import SaveAt
 import jax.numpy as jnp
 import jax.random as random
 from fusions.model import Model
-from jax import grad, jit, pmap, vmap
+from jax import disable_jit, grad, jit, pmap, vjp, vmap
 
 
 class CFM(Model):
-    """Continuous Flows Model."""
+    """Continuous Flow Matching."""
 
-    @partial(jit, static_argnums=[0, 2])
-    def reverse_process(self, initial_samples, score, rng):
+    @partial(jit, static_argnums=[0, 2, 4, 5])
+    def reverse_process(self, initial_samples, score, rng, steps=0, solution="exact"):
         """Run the reverse ODE.
 
         Args:
             initial_samples (jnp.ndarray): Samples to run the model on.
             score (callable): Score function.
+            rng: Jax Random number generator key.
+            steps (int, optional) : Number of time steps to save. Defaults to 0.
+            solution (str, optional): Method to use for the jacobian. Defaults to "exact".
+                        one of "exact", "none", "approx".
 
         Returns:
             Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
         """
         t0, t1, dt0 = 0.0, 1.0, 1e-3
-        ts = jnp.linspace(t0, t1, 100)
+        ts = jnp.linspace(t0, t1, steps)
 
-        def f(x):
-            # return score(x, jnp.atleast_1d(t))
-            def score_args(ti, xi, args):
-                return score(xi, jnp.atleast_1d(ti))
+        def solver_none(ti, conditions, args):
+            xi, null_jac = conditions
+            return score(xi, jnp.atleast_1d(ti)), null_jac
 
-            term = dfx.ODETerm(score_args)
+        def solver_exact(ti, conditions, args):
+            xi, _ = conditions
+            f, vjp_f = vjp(score, xi, jnp.atleast_1d(ti))
+            (size,) = xi.shape
+            eye = jnp.eye(size)
+            (dfdx, _) = vmap(vjp_f)(eye)
+            logp = jnp.trace(dfdx)
+            return f, logp
+
+        def solver_approx(ti, conditions, args):
+            eps = args
+            xi, _ = conditions
+            f, vjp_f = vjp(score, xi, jnp.atleast_1d(ti))
+            eps_dfdx, _ = vjp_f(eps)
+            logp = jnp.sum(eps_dfdx * eps)
+            return f, logp
+
+        def f(x, eps):
+            jacobian = 0.0
+            conditions = (x, jacobian)
+            if solution == "exact":
+                term = dfx.ODETerm(solver_exact)
+            elif solution == "approx":
+                term = dfx.ODETerm(solver_approx)
+            else:
+                term = dfx.ODETerm(solver_none)
+            # term = dfx.ODETerm(score_args_exact)
             # solver = dfx.Heun()
             solver = dfx.Dopri5()
+
             sol = dfx.diffeqsolve(
-                term, solver, t0, t1, dt0, x, saveat=SaveAt(t1=True, ts=ts)
+                term,
+                solver,
+                t0,
+                t1,
+                dt0,
+                conditions,
+                args=eps,
+                saveat=SaveAt(t1=True, ts=ts),
             )
             return sol.ys
 
-        yt = vmap(f)(initial_samples)
-        return yt[:, -1, :], jnp.moveaxis(yt, 0, 1)
+        # batch_rngs = random.split(rng, initial_samples.shape[0])
+        eps = random.normal(rng, initial_samples.shape) * 1e-3
+        yt, jt = vmap(f)(initial_samples, eps)
+        return yt, jt
 
     @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):
@@ -64,105 +103,6 @@ class CFM(Model):
         )
         psi = x1 - x0
         loss = jnp.mean((output - psi) ** 2)
-        return loss, updates
-
-
-class VPCFM(CFM):
-    """Continuous Flows Model with Volume preservation enforced."""
-
-    @partial(jit, static_argnums=[0, 2])
-    def reverse_process(self, initial_samples, score, rng):
-        """Run the reverse ODE.
-
-        Args:
-            initial_samples (jnp.ndarray): Samples to run the model on.
-            score (callable): Score function.
-
-        Returns:
-            Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
-        """
-        t0, t1, dt0 = 0.0, 1.0, 1e-3
-        ts = jnp.linspace(t0, t1, 100)
-
-        def f(x):
-            # return score(x, jnp.atleast_1d(t))
-            def score_args(ti, xi, args):
-                return score(xi, jnp.atleast_1d(ti))
-
-            term = dfx.ODETerm(score_args)
-            # solver = dfx.Heun()
-            solver = dfx.Dopri5()
-            sol = dfx.diffeqsolve(
-                term, solver, t0, t1, dt0, x, saveat=SaveAt(t1=True, ts=ts)
-            )
-            return sol.ys
-
-        yt = vmap(f)(initial_samples)
-        return yt[:, -1, :], jnp.moveaxis(yt, 0, 1)
-
-    @partial(jit, static_argnums=[0, 2])
-    def jac(self, initial_samples, score, rng):
-        """Run the reverse ODE and track the jacobian.
-
-        Args:
-            initial_samples (jnp.ndarray): Samples to run the model on.
-            score (callable): Score function.
-
-        Returns:
-            Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
-        """
-        t0, t1, dt0 = 0.0, 1.0, 1e-3
-        ts = jnp.linspace(t0, t1, 100)
-
-        def f(x):
-            # return score(x, jnp.atleast_1d(t))
-            # def approx_logp_wrapper(ti, xi, args):
-            #     *args, eps, func = args
-            #     fn = lambda yi: score(yi, jnp.atleast_1d(ti))
-            #     # fn = score(xi, jnp.atleast_1d(ti))
-            #     f, vjp_fn = jax.vjp(fn, xi)
-            #     (eps_dfdy,) = vjp_fn(eps)
-            #     logp = jnp.sum(eps_dfdy * eps)
-            #     return f, logp
-
-            def score_args(ti, xi, args):
-                return score(xi, jnp.atleast_1d(ti))
-
-            term = dfx.ODETerm(score_args)
-            # solver = dfx.Heun()
-            _, step_rng = jax.random.split(rng.key)
-            # eps = random.normal(key, y.shape)
-            # delta_log_likelihood = 0.0
-            solver = dfx.Dopri5()
-            sol = dfx.diffeqsolve(
-                term, solver, t0, t1, dt0, x, saveat=SaveAt(t1=True, ts=ts)
-            )
-            return sol.ys
-
-        yt = vmap(f)(initial_samples)
-        return yt[:, -1, :], jnp.moveaxis(yt, 0, 1)
-
-    @partial(jit, static_argnums=[0])
-    def loss(self, params, batch, batch_prior, batch_stats, rng):
-        """Loss function for training the CFM score."""
-        sigma_noise = 1e-3
-        rng, step_rng = random.split(rng)
-        N_batch = batch.shape[0]
-
-        t = random.uniform(step_rng, (N_batch, 1))
-        x0 = batch_prior
-        x1 = batch
-        noise = random.normal(step_rng, (N_batch, self.ndims))
-        psi_0 = t * batch + (1 - t) * batch_prior + sigma_noise * noise
-        output, updates = self.state.apply_fn(
-            {"params": params, "batch_stats": batch_stats},
-            psi_0,
-            t,
-            train=True,
-            mutable=["batch_stats"],
-        )
-        psi = x1 - x0
-        loss = jnp.mean((output - psi) ** 2 + normal_log_likelihood(batch_prior))
         # dfx.ODETerm
         # term = dfx.ODETerm(approx_logp_wrapper)
         # solver = dfx.Dopri5()

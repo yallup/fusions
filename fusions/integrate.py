@@ -141,7 +141,7 @@ class NestedDiffusion(Integrator):
                 efficiency=target_eff,
             )
             step += 1
-            live, contour = self.stash(live + points, n)
+            # live, contour = self.stash(live + points, n)
 
             if success:
                 live, contour = self.stash(live + points, n)
