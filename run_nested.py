@@ -10,7 +10,7 @@ from margarine.clustered import clusterMAF
 from margarine.maf import MAF
 from scipy.stats import multivariate_normal, uniform
 
-from fusions.cfm import CFM, VPCFM
+from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
 from fusions.integrate import NestedDiffusion, SequentialDiffusion
 

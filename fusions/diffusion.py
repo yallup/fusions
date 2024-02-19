@@ -2,10 +2,9 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from fusions.model import Model
 from jax import grad, jit, random, vmap
 from jax.lax import scan
-
-from fusions.model import Model
 
 
 class Diffusion(Model):
@@ -42,8 +41,8 @@ class Diffusion(Model):
         """Dispersion of the diffusion model."""
         return jnp.sqrt(self.beta_t(t))
 
-    @partial(jit, static_argnums=[0, 2])
-    def reverse_process(self, initial_samples, score, rng):
+    @partial(jit, static_argnums=[0, 2, 4, 5])
+    def reverse_process(self, initial_samples, score, rng, steps=0, solution="none"):
         """Run the reverse SDE.
 
         Args:
@@ -72,7 +71,13 @@ class Diffusion(Model):
         dts = self.train_ts[1:] - self.train_ts[:-1]
         params = jnp.stack([self.train_ts[:-1], dts], axis=1)
         (x, _), (x_t, _) = scan(f, (initial_samples, step_rng), params)
-        return x, x_t
+        xs = jnp.concatenate([x_t, x[None, ...]], axis=0)
+        xs = jnp.moveaxis(xs, 1, 0)
+        jac = jnp.zeros_like(xs)  # todo
+        return (
+            xs[:, -(steps + 1) :, :].squeeze(),
+            jac[:, -(steps + 1) :, :].squeeze(),
+        )
 
     @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):
