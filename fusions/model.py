@@ -56,6 +56,8 @@ class Model(ABC):
         Keyword Args:
             steps (int): Number of aditional time steps to save at.
             jac (bool): If True, return the jacobian of the process as well as the output (tuple).
+            solution (str): Method to use for the jacobian. Defaults to "exact".
+                        one of "exact", "none", "approx".
 
         Returns:
             jnp.ndarray: Samples from the posterior distribution.
@@ -85,6 +87,9 @@ class Model(ABC):
         Keyword Args:
             steps (int): Number of aditional time steps to save at.
             jac (bool): If True, return the jacobian of the process as well as the output (tuple).
+            solution (str): Method to use for the jacobian. Defaults to "exact".
+                        one of "exact", "none", "approx".
+
 
         Returns:
             jnp.ndarray: Samples from the posterior distribution.
@@ -105,6 +110,9 @@ class Model(ABC):
 
         Args:
             n (int): Number of samples to draw.
+
+        Keyword Args:
+            see sample_posterior and predict.
 
         Returns:
             jnp.ndarray: Samples from the posterior distribution.

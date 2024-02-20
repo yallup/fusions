@@ -48,6 +48,12 @@ class Diffusion(Model):
         Args:
             initial_samples (jnp.ndarray): Samples to run the model on.
             score (callable): Score function.
+            rng: Jax Random number generator key.
+
+        Keyword Args:
+            steps (int, optional) : Number of time steps to save in addition to t=1. Defaults to 0.
+            solution (str, optional): Method to use for the jacobian. Defaults to "none".
+                        one of "exact", "none", "approx".
 
         Returns:
             Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
@@ -81,7 +87,15 @@ class Diffusion(Model):
 
     @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):
-        """Loss function for training the diffusion model."""
+        """Loss function for training the diffusion model.
+
+        Args:
+            params (Any): Model parameters.
+            batch (jnp.ndarray): Batch of data.
+            batch_prior (jnp.ndarray): Batch of prior samples.
+            batch_stats (Any): Batch statistics (typicall).
+            rng: Jax Random number generator key.
+        """
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
         t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)

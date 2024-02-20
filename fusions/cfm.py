@@ -21,7 +21,9 @@ class CFM(Model):
             initial_samples (jnp.ndarray): Samples to run the model on.
             score (callable): Score function.
             rng: Jax Random number generator key.
-            steps (int, optional) : Number of time steps to save. Defaults to 0.
+
+        Keyword Args:
+            steps (int, optional) : Number of time steps to save in addition to t=1. Defaults to 0.
             solution (str, optional): Method to use for the jacobian. Defaults to "exact".
                         one of "exact", "none", "approx".
 
@@ -87,7 +89,16 @@ class CFM(Model):
 
     @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):
-        """Loss function for training the CFM score."""
+        """Loss function for training the CFM score.
+
+        Args:
+            params (jnp.ndarray): Parameters of the model.
+            batch (jnp.ndarray): Target batch.
+            batch_prior (jnp.ndarray): Prior batch.
+            batch_stats (Any): Batch statistics (batchnorm running totals).
+            rng: Jax Random number generator key.
+
+        """
         sigma_noise = 1e-3
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
