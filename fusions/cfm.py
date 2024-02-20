@@ -83,7 +83,6 @@ class CFM(Model):
 
         # batch_rngs = random.split(rng, initial_samples.shape[0])
         eps = random.normal(rng, initial_samples.shape)
-        # logp = self.prior.logpdf(initial_samples)
         yt, jt = vmap(f)(initial_samples, eps)
         return yt, jt
 
@@ -117,9 +116,4 @@ class CFM(Model):
         )
         psi = x1 - x0
         loss = jnp.mean((output - psi) ** 2)
-        # dfx.ODETerm
-        # term = dfx.ODETerm(approx_logp_wrapper)
-        # solver = dfx.Dopri5()
-        # with jax.disable_jit():
-        #     sol = dfx.diffeqsolve(term, solver, 1.0,0.0, -1e-3, batch_prior, (noise,self.state.apply_fn))
         return loss, updates
