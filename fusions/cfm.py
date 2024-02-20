@@ -65,6 +65,8 @@ class CFM(Model):
             # solver = dfx.Heun()
             solver = dfx.Dopri5()
 
+            solver_approx
+
             sol = dfx.diffeqsolve(
                 term,
                 solver,
@@ -78,7 +80,8 @@ class CFM(Model):
             return sol.ys
 
         # batch_rngs = random.split(rng, initial_samples.shape[0])
-        eps = random.normal(rng, initial_samples.shape) * 1e-3
+        eps = random.normal(rng, initial_samples.shape)
+        # logp = self.prior.logpdf(initial_samples)
         yt, jt = vmap(f)(initial_samples, eps)
         return yt, jt
 

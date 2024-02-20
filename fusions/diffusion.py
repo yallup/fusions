@@ -75,8 +75,8 @@ class Diffusion(Model):
         xs = jnp.moveaxis(xs, 1, 0)
         jac = jnp.zeros_like(xs)  # todo
         return (
-            xs[:, -(steps + 1) :, :].squeeze(),
-            jac[:, -(steps + 1) :, :].squeeze(),
+            xs[:, -(steps + 1) :, :],
+            jac[:, -(steps + 1) :, :],
         )
 
     @partial(jit, static_argnums=[0])
