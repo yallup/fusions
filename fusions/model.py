@@ -22,13 +22,16 @@ class Model(ABC):
     def __init__(self, prior=None, n=None, **kwargs) -> None:
         self.prior = prior
         self.rng = random.PRNGKey(kwargs.get("seed", 2023))
+        self.noise = kwargs.pop("noise", 1e-3)
         if not self.prior:
             if not n:
                 raise ValueError("Either prior or n must be specified.")
             self.rng, step_rng = random.split(self.rng)
             self.prior = multivariate_normal(jnp.zeros(n))
 
-        self.map = kwargs.get("map", NullOT)
+        # self.map = kwargs.get("map", NullOT)
+        self.map = PriorExtendedNullOT
+
         self.state = None
         self.calibrate_state = None
 
@@ -64,7 +67,7 @@ class Model(ABC):
         """
         jac = kwargs.get("jac", False)
         steps = kwargs.get("steps", 0)
-        solution = kwargs.get("solution", "approx")
+        solution = kwargs.get("solution", "none")
         # self.rng, step_rng = random.split(self.rng)
         x, j = self.reverse_process(
             initial_samples,
@@ -135,7 +138,7 @@ class Model(ABC):
 
         train_size = data.shape[0]
 
-        prior_samples = jnp.array(self.prior.rvs(train_size))
+        prior_samples = jnp.array(self.prior.rvs(train_size * 100))
         batch_size = min(batch_size, train_size)
 
         losses = []

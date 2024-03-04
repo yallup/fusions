@@ -98,7 +98,7 @@ class CFM(Model):
             rng: Jax Random number generator key.
 
         """
-        sigma_noise = 1e-3
+        # sigma_noise = 1e-3
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
 
@@ -106,7 +106,8 @@ class CFM(Model):
         x0 = batch_prior
         x1 = batch
         noise = random.normal(step_rng, (N_batch, self.ndims))
-        psi_0 = t * batch + (1 - t) * batch_prior + sigma_noise * noise
+        # psi_0 = t * batch + (1 - t) * batch_prior + sigma_noise * noise
+        psi_0 = t * batch + (1 - t) * batch_prior + self.noise * noise
         output, updates = self.state.apply_fn(
             {"params": params, "batch_stats": batch_stats},
             psi_0,
