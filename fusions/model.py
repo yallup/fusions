@@ -33,7 +33,7 @@ class Model(ABC):
         self.calibrate_state = None
 
     @abstractmethod
-    def reverse_process(self, initial_samples, score, rng):
+    def reverse_process(self, initial_samples, score, rng, **kwargs):
         pass
 
     def sample_prior(self, n):
@@ -54,21 +54,29 @@ class Model(ABC):
             initial_samples (jnp.ndarray): Samples to run the model on.
 
         Keyword Args:
-            history (bool): If True, return the history of the process as well as the outpute (tuple).
-                Defaults to False.
+            steps (int): Number of aditional time steps to save at.
+            jac (bool): If True, return the jacobian of the process as well as the output (tuple).
+            solution (str): Method to use for the jacobian. Defaults to "exact".
+                        one of "exact", "none", "approx".
 
         Returns:
             jnp.ndarray: Samples from the posterior distribution.
         """
-        hist = kwargs.get("history", False)
+        jac = kwargs.get("jac", False)
+        steps = kwargs.get("steps", 0)
+        solution = kwargs.get("solution", "approx")
         # self.rng, step_rng = random.split(self.rng)
-        x, x_t = self.reverse_process(
-            initial_samples, self._predict, self.rng
+        x, j = self.reverse_process(
+            initial_samples,
+            self._predict,
+            self.rng,
+            steps=steps,
+            solution=solution,
         )  # , step_rng)
-        if hist:
-            return x, x_t
+        if jac:
+            return x.squeeze(), j.squeeze()
         else:
-            return x
+            return x.squeeze()
 
     def sample_posterior(self, n, **kwargs):
         """Draw samples from the posterior distribution.
@@ -77,8 +85,11 @@ class Model(ABC):
             n (int): Number of samples to draw.
 
         Keyword Args:
-            history (bool):  return the history of the process as well as the outpute (tuple).
-                Defaults to False.
+            steps (int): Number of aditional time steps to save at.
+            jac (bool): If True, return the jacobian of the process as well as the output (tuple).
+            solution (str): Method to use for the jacobian. Defaults to "exact".
+                        one of "exact", "none", "approx".
+
 
         Returns:
             jnp.ndarray: Samples from the posterior distribution.
@@ -99,6 +110,9 @@ class Model(ABC):
 
         Args:
             n (int): Number of samples to draw.
+
+        Keyword Args:
+            see sample_posterior and predict.
 
         Returns:
             jnp.ndarray: Samples from the posterior distribution.

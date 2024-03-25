@@ -1,11 +1,11 @@
 import warnings
 
-import jax
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 from scipy.stats import multivariate_normal
 
+import jax
 from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
 
@@ -81,7 +81,8 @@ class TestDiffusion(object):
         x1 = model.predict(batch)
         assert (batch != x1).all()
 
-    def test_reverse_process(self, model, batch):
+    @pytest.mark.parametrize("steps", [0, 99])
+    def test_reverse_process_default(self, model, batch, steps):
         model.ndims = batch.shape[-1]
         model._init_state()
 
@@ -95,11 +96,11 @@ class TestDiffusion(object):
             train=False,
         )
         model.rng = jax.random.PRNGKey(0)
-        x1, x1t = model.reverse_process(batch, model._predict, model.rng)
-        x2, x2t = model.predict(batch, history=True)
+        x1t, _ = model.reverse_process(batch, model._predict, model.rng, steps=steps)
+        x2t = model.predict(batch, steps=steps)
 
-        assert_allclose(x1, x2)
-        assert_allclose(x1t, x2t)
+        assert_allclose(x1t.squeeze(), x2t)
+        assert x1t.shape[-2] == steps + 1
 
         x3 = model.sample_posterior(batch.shape[0])
         x4 = model.sample_posterior(batch.shape[0])
@@ -109,3 +110,32 @@ class TestDiffusion(object):
 
 class TestCFM(TestDiffusion):
     CLS = CFM
+
+    @pytest.mark.parametrize("solution", ["exact", "approx", "none"])
+    def test_reverse_process_jac(self, model, batch, solution):
+        model.ndims = batch.shape[-1]
+        model._init_state()
+
+        model._predict = lambda x, t: model.state.apply_fn(
+            {
+                "params": model.state.params,
+                "batch_stats": model.state.batch_stats,
+            },
+            x,
+            t,
+            train=False,
+        )
+        model.rng = jax.random.PRNGKey(0)
+
+        x1, j1 = model.predict(batch, jac=True, solution=solution)
+        x2, j2 = model.rvs(batch.shape[0], jac=True, solution=solution)
+
+        assert (x1.shape == x2.shape) and (j1.shape == j2.shape)
+
+        x3, j3 = model.predict(batch, jac=True, solution=solution, steps=5)
+        x4, j4 = model.rvs(batch.shape[0], jac=True, solution=solution, steps=5)
+
+        assert (x3.shape == x4.shape) and (j3.shape == j4.shape)
+
+        assert_allclose(x3[:, -1, :], x1)
+        assert_allclose(j3[..., -1], j1)

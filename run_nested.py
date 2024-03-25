@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # import jax.random as rng
-from lsbi.model import LinearMixtureModel, LinearModel
+from lsbi.model import LinearModel, MixtureModel
 from margarine.clustered import clusterMAF
 from margarine.maf import MAF
 from scipy.stats import multivariate_normal, uniform
@@ -22,11 +22,11 @@ np.random.seed(12)
 
 mixtures = 10
 A = np.random.randn(mixtures, data_dims, dims)
-Model = LinearMixtureModel(
+Model = MixtureModel(
     # M=np.stack([np.eye(dims), -np.eye(dims)]),
     M=A,
     mu=np.zeros(dims),
-    sigma=np.eye(dims),
+    Sigma=np.eye(dims),
     m=np.zeros(data_dims),
     C=np.eye(data_dims) * 0.1,
 )
@@ -37,7 +37,7 @@ logz = Model.evidence().logpdf(data)
 
 class likelihood(object):
     def logpdf(self, x):
-        return np.asarray([Model.likelihood(y).logpdf(data) for y in x])
+        return Model.likelihood(x).logpdf(data)
 
 
 # diffuser = SequentialDiffusion(
@@ -46,7 +46,7 @@ class likelihood(object):
 diffuser = NestedDiffusion(prior=Model.prior(), likelihood=likelihood(), model=CFM)
 
 
-diffuser.run(steps=10, n=500, target_eff=0.1)
+diffuser.run(steps=12, n=500, target_eff=0.1)
 samples = diffuser.samples()
 
 print(f"analytic: {logz:.2f}")
