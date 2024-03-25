@@ -9,10 +9,12 @@ logging.basicConfig(level=logging.INFO)
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pickle import dump, load
 
+import anesthetic.termination as term
 import matplotlib.pyplot as plt
 import numpy as np
-from anesthetic import MCMCSamples, NestedSamples, make_2d_axes
+from anesthetic import MCMCSamples, NestedSamples, make_2d_axes, read_chains
 from anesthetic.utils import compress_weights, neff
 
 # from anesthetic.read.hdf import read_hdf, write_hdf
@@ -22,6 +24,7 @@ from tqdm import tqdm
 
 from fusions.model import Model
 from fusions.utils import unit_hyperball, unit_hypercube
+from jax import random
 
 
 @dataclass
@@ -56,13 +59,17 @@ class Stats:
 
 @dataclass
 class Settings:
-    n: int = 5000
+    n: int = 500
     target_eff: float = 0.1
     steps: int = 20
     prior_boost: int = 5
     eps: float = 1e-3
-    efficiency: float = 1 / np.e
-    logzero: float = -1e30
+    batch_size: float = 0.25
+    epoch_factor: int = 1
+    restart: bool = False
+    noise: float = 1e-3
+    # efficiency: float = 1 / np.e
+    # logzero: float = -1e30
 
     def __repr__(self):
         return (
@@ -72,15 +79,22 @@ class Settings:
             f"  steps: {self.steps},\n"
             f"  prior_boost: {self.prior_boost},\n"
             f"  eps: {self.eps},\n"
-            f"  efficiency: {self.efficiency},\n"
+            f"  batch_size: {self.batch_size},\n"
+            f"  epoch_factor: {self.epoch_factor},\n"
+            f"  restart: {self.restart},\n"
+            f"  noise: {self.noise},\n"
+            # f"  efficiency: {self.efficiency},\n"
             f")"
         )
 
 
 @dataclass
 class Trace:
-    loss: float
-    live: Point
+    diff: Point = field(default_factory=dict)
+    live: Point = field(default_factory=dict)
+    accepted_live: Point = field(default_factory=dict)
+    iteration: list[int] = field(default_factory=list)
+    losses: list[float] = field(default_factory=dict)
 
 
 class Integrator(ABC):
@@ -94,55 +108,39 @@ class Integrator(ABC):
         self.settings = Settings()
         self.model = kwargs.get("model", CFM)
         latent = kwargs.get("latent", unit_hyperball)
+        # latent = multivariate_normal(mean=np.zeros(prior.dim), cov=np.eye(prior.dim))
         self.latent = latent(prior.dim, scale=1.0)
-
-        self.trace = {}
+        self.dim = prior.dim
+        self.rng = kwargs.get("rng", random.PRNGKey(0))
+        self.trace = Trace()
         # self.latent = multivariate_normal(
         #     np.zeros(prior.dim), np.eye(prior.dim)
         # )
 
     def sample(self, n, dist, logl_birth=0.0, beta=1.0):
-        # if isinstance(dist, Model):
-        #     idx = compress_weights(1/np.exp(j),ncompress="equal")
-        #     x, j = dist.rvs(n, solution="exact", jac = False)
-        # else:
-        #     x = np.asarray(dist.rvs(n))
-        #     j = np.zeros(n)
-        # if isinstance(dist, Model):
-        #     x, j  = self.dist.rvs(n, jac=True, solution="exact")
-        #     w = 1 / np.exp(j)
-        # else:
-        #     x = np.asarray(dist.rvs(n))
-        #     w = np.ones(n)
-
-        # x = np.asarray(dist.rvs(n))
-        # log_pi = self.prior.logpdf(x)
         if isinstance(dist, Model):
-            x, j = dist.rvs(n, jac=True, solution="exact")
-            # w = np.exp(1/np.asarray(j))
-            # dist.latent.rvs(n)
-            # x, j = dist.rvs(n, jac=True, solution="none")
-            log_pi = self.prior.logpdf(x)
+            x, j = dist.rvs(n, jac=True, solution="none")
             x = np.asarray(x)
-            # w = np.ones(n)
-            w = np.exp(log_pi - j)
-            w = 1 / dist.predict_weight(x).squeeze()
-            print(np.log(w))
-
+            w = np.ones(n)
         else:
             x = np.asarray(dist.rvs(n))
             w = np.ones(n)
         log_pi = self.prior.logpdf(x)
 
+        idx = compress_weights(w.flatten(), ncompress="equal")
+        idx = np.asarray(idx, dtype=bool)
+
         logl = self.likelihood.logpdf(x) * beta
-        self.stats.nlike += n
+        self.stats.nlike += idx.sum()
         logl_birth = np.ones_like(logl) * logl_birth
-        idx = compress_weights(w, ncompress="equal")
-        print(sum(idx))
-        # idx = np.ones_like(log_pi, dtype=bool)
         points = [
-            Point(x[i], logl[i], logl_birth[i], logl_pi=log_pi[i])
-            for i in range(x[idx].shape[0])
+            Point(
+                x[idx][i],
+                logl[idx][i],
+                logl_birth[idx][i],
+                logl_pi=log_pi[idx][i],
+            )
+            for i in range(idx.sum())
         ]
         return points
 
@@ -176,157 +174,94 @@ class Integrator(ABC):
         return logsumexp(likelihood + prior) - np.log(n)
 
     def write(self, filename):
-        # Current anesthetic IO seems cumbersome.
-        raise NotImplementedError
+        self.points_to_samples(self.dead).to_csv(filename + ".csv")
 
     def read(self, filename):
-        raise NotImplementedError
+        self.dead = read_chains(filename)
 
 
 class NestedDiffusion(Integrator):
-    # def sample_constrained(
-    #     self, n, dist, constraint, efficiency=0.1, **kwargs
-    # ):
-    #     success = []
-    #     trials = 0
-    #     while len(success) < n:
-    #         batch_success = []
-    #         pi = self.sample(n, dist, constraint, **kwargs)
-    #         batch_success += [p for p in pi if p.logl > constraint]
-    #         success += batch_success
-    #         trials += n
-    #         if len(batch_success) < n * efficiency:
-    #             return False, len(success) / trials, batch_success
-    #     return True, len(success) / trials, success
-
     def sample_constrained(self, n, dist, constraint, efficiency=0.1, **kwargs):
-        trials = int(n * 1 / efficiency)
-        pi = self.sample(trials, dist, constraint, **kwargs)
-        success = [p for p in pi if p.logl > constraint]
-        if len(success) < n:
-            return False, len(success) / trials, success
-        return True, len(success) / trials, success
+        success = []
+        trials = 0
+        while len(success) < n:
+            batch_success = []
+            pi = self.sample(n, dist, constraint, **kwargs)
+            batch_success += [p for p in pi if p.logl > constraint]
+            success += batch_success
+            trials += n
+        eff = len(success) / trials
+        return eff > efficiency, eff, success
 
-    def run(self, n=500, target_eff=0.1, steps=20, prior_boost=1, eps=1e-3):
+    def train_diffuser(self, dist, points):
+        dist.train(
+            np.asarray([yi.x for yi in points]),
+            n_epochs=int(len(points) * self.settings.epoch_factor),
+            batch_size=int(len(points) * self.settings.batch_size),
+            lr=1e-3,
+            restart=self.settings.restart,
+            noise=self.settings.noise,
+        )
+        return dist
+
+    def run(self):
+        print(self.settings)
+        n = self.settings.n
         live = self.sample(n * self.settings.prior_boost, self.prior, self.logzero)
+
         step = 0
         logger.info("Done sampling prior")
         live, contour = self.stash(live, n // 2, drop=False)
         self.dist = self.prior
         self.update_stats(live, n)
         logger.info(f"{self.stats}")
-        diffuser = self.model(self.latent)
+        diffuser = self.model(self.latent, noise=1e-3)
+        diffuser.rng, _ = random.split(diffuser.rng)
 
-        # while step < steps:
-        # eps=1
-        while not self.points_to_samples(live + self.dead).terminate():
+        while not self.points_to_samples(live + self.dead).terminated(
+            "logZ", self.settings.eps
+        ):
             success, eff, points = self.sample_constrained(
                 n // 2,
                 self.dist,
                 contour,
-                efficiency=target_eff,
+                efficiency=self.settings.target_eff,
             )
-            step += 1
-            # live, contour = self.stash(live + points, n)
+            self.trace.live[step] = live
+            live = live + points
+            self.trace.accepted_live[step] = points
+            live, contour = self.stash(live, n // 2)
+            # x = self.dist.rvs(len(live))
+            # self.trace.diff[step] = x
+            # t = np.asarray([yi.x for yi in live])
+            # self.dist.calibrate(np.asarray([yi.x for yi in live]), np.asarray(x), n_epochs=len(live) * 5, batch_size=n, restart =True)
 
-            if success or len(live) >= n:
-                live, contour = self.stash(live + points, n // 2)
+            if success:
                 logger.info(f"Efficiency at: {eff}, using previous diffusion")
-                self.update_stats(live, n)
-                logger.info(f"{self.stats}")
-            # step += 1
-            if not success and len(live) < n:
+            if not success:
                 logger.info(f"Efficiency dropped to: {eff}, training new diffusion")
-                # print(np.asarray([yi.x for yi in live + points]).std(axis=0).mean())
-                # diffuser = Diffusion(self.prior)
-                diffuser.train(
-                    np.asarray([yi.x for yi in live + points]),
-                    n_epochs=len(live) * 10,
-                    batch_size=n,
-                    lr=1e-3,
-                    # noise = np.asarray([yi.x for yi in live + points]).std(axis=0).mean()
-                )
-                live += points
+                diffuser = self.train_diffuser(diffuser, points)
+                self.trace.losses[step] = diffuser.trace.losses
                 self.dists.append(diffuser)
                 self.dist = diffuser
-                # plt.style.use("computermodern")
-                # f, a = plt.subplots(
-                #     ncols=4, figsize=(11, 3), sharex=True, sharey=True
-                # )
-                self.dist.calibrate(
-                    np.asarray([yi.x for yi in live + points]),
-                    n_epochs=len(live) * 5,
-                    batch_size=n,
-                )
-                f, a = make_2d_axes(
-                    np.arange(self.prior.dim), upper=False, diagonal=False
-                )
-                # a=MCMCSamples(self.prior.rvs(200)).plot_2d(a, kinds={"lower":"scatter_2d"})
-                a = MCMCSamples([p.x for p in live + points]).plot_2d(
-                    a,
-                    kinds={
-                        "lower": "scatter_2d"
-                    },  # , lower_kwargs={"c": self.dist.predict_weight(np.asarray([p.x for p in live + points])).squeeze()}
-                )
-                f.savefig(f"plots/step_{step}_corner.pdf")
-                # f, a = plt.subplots(
-                #     ncols=4, figsize=(11, 3), sharex=True, sharey=True
-                # )
 
-                # cand, j = self.dist.rvs(len(live), jac=True, solution="exact")
-                # ratio = 1 / np.log(self.dist.predict_weight(cand).squeeze())
-                # weight = np.exp(self.prior.logpdf(cand))
-                # # weight = j - np.exp(self.prior.logpdf(cand))
-                # a[0].scatter(*cand[...,0].T, c=j, alpha=0.7, rasterized=True)
-                # a[1].scatter(*cand.T, c=weight, alpha=0.7, rasterized=True)
-                # a[2].scatter(*cand.T, c=ratio, alpha=0.7, rasterized=True)
-                # # a[0].scatter(*MCMCSamples(cand,weights = compress_weights(1/np.exp(j))).compress().to_numpy().T)
-                # a[3].scatter(
-                #     *cand.T,
-                #     c=(
-                #         self.dist.predict_weight(cand).squeeze()
-                #         * self.prior.pdf(cand)
-                #     )
-                #     - 1 / j,
-                #     alpha=0.7,
-                #     rasterized=True,
-                # )
-                # a[0].scatter(
-                #     *np.asarray([yi.x for yi in live]).T,
-                #     c="C1",
-                #     alpha=1.0,
-                #     marker=".",
-                #     s=3,
-                # )
-                # a[1].scatter(
-                #     *np.asarray([yi.x for yi in live]).T,
-                #     c="C1",
-                #     alpha=1.0,
-                #     marker=".",
-                #     s=3,
-                # )
-                # a[0].set_title("Jacobian")
-                # a[1].set_title("Prior")
-                # a[2].set_title("Classifier")
-                # # a[0].set_xlim(-2.5, 1.5)
-                # # a[0].set_ylim(-1.5, 2.0)
-                # # a[1].set_xlim(-2.5, 1.5)
-                # # a[1].set_ylim(-1.5, 2.0)
-                # a[3].set_title(r"Classifier $\times$ Prior - Jac")
-                # # a[2].set_xlim(-2.5, 1.5)
-                # # a[2].set_ylim(-1.5, 2.0)
-                # f.tight_layout(pad=0.5)
-                # f.savefig(f"plots/step_{step}_disc.pdf")
-            logger.info(f"Step {step}/{steps} complete")
+            self.update_stats(live, n)
+            logger.info(f"{self.stats}")
+            step += 1
+            self.trace.iteration.append(step)
+
+            logger.info(f"Step {step} complete")
 
         self.stash(live, -len(live))
+        dump(self.trace, open("plots/trace.pkl", "wb"))
         logger.info(f"Final stats: {self.stats}")
 
     def update_stats(self, live, n):
         running_samples = self.points_to_samples(self.dead + live)
         self.stats.ndead = len(self.dead)
         lZs = running_samples.logZ(100)
-        self.stats.logX = -(len(self.dead) - n * self.settings.prior_boost) / n
+        # self.stats.logX = running_samples.critical_ratio()
+        running_samples.terminated()
         self.stats.logz = lZs.mean()
         self.stats.logz_err = lZs.std()
 

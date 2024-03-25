@@ -108,6 +108,8 @@ class CFM(Model):
         noise = random.normal(step_rng, (N_batch, self.ndims))
         # psi_0 = t * batch + (1 - t) * batch_prior + sigma_noise * noise
         psi_0 = t * batch + (1 - t) * batch_prior + self.noise * noise
+        # psi_0 = t * batch + (1 - t) * batch_prior
+
         output, updates = self.state.apply_fn(
             {"params": params, "batch_stats": batch_stats},
             psi_0,

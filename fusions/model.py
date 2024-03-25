@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 
 import anesthetic as ns
 import optax
@@ -12,6 +13,12 @@ import jax.random as random
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
 from jax import jit
+
+
+@dataclass
+class Trace:
+    iteration: int = field(default=0)
+    losses: list[float] = field(default_factory=list)
 
 
 class Model(ABC):
@@ -34,6 +41,7 @@ class Model(ABC):
 
         self.state = None
         self.calibrate_state = None
+        self.trace = None
 
     @abstractmethod
     def reverse_process(self, initial_samples, score, rng, **kwargs):
@@ -124,6 +132,7 @@ class Model(ABC):
 
     def _train(self, data, **kwargs):
         """Internal wrapping of training loop."""
+        self.trace = Trace()
         batch_size = kwargs.get("batch_size", 256)
         n_epochs = kwargs.get("n_epochs", data.shape[0])
 
@@ -150,13 +159,15 @@ class Model(ABC):
             batch = data[perm, :]
             batch_prior = prior_samples[perm_prior, :]
             loss, self.state = update_step(self.state, batch, batch_prior, step_rng)
-            losses.append(loss)
+            self.trace.losses.append(loss)
+            self.trace.iteration += 1
+            # losses.append(loss)
             # if (k + 1) % 100 == 0:
             #     mean_loss = jnp.mean(jnp.array(losses))
             #     self.state.losses.append((mean_loss, k))
             #     tepochs.set_postfix(loss=mean_loss)
 
-    def _train_calibrator(self, data, **kwargs):
+    def _train_calibrator(self, data_a, data_b, **kwargs):
         """Internal wrapping of training loop."""
         batch_size = kwargs.get("batch_size", 512)
         n_epochs = kwargs.get("n_epochs", 50)
@@ -170,19 +181,19 @@ class Model(ABC):
             state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
 
-        train_size = data.shape[0]
+        train_size = data_a.shape[0]
 
-        if self.prior:
-            prior_samples = jnp.array(self.prior.rvs(train_size))
-        else:
-            prior_samples = jnp.zeros_like(data)
+        # if self.prior:
+        #     prior_samples = jnp.array(self.prior.rvs(train_size))
+        # else:
+        #     prior_samples = jnp.zeros_like(data)
 
         batch_size = min(batch_size, train_size)
         n_batches = train_size // batch_size
-        labels_a = jnp.zeros(prior_samples.shape[0])
-        labels_b = jnp.ones(data.shape[0])
+        labels_a = jnp.zeros(data_a.shape[0])
+        labels_b = jnp.ones(data_b.shape[0])
         labels = jnp.concatenate([labels_a, labels_b])
-        data = jnp.concatenate([prior_samples, data])
+        data = jnp.concatenate([data_a, data_b])
 
         losses = []
         tepochs = tqdm(range(n_epochs))
@@ -301,7 +312,7 @@ class Model(ABC):
             train=False,
         )
 
-    def calibrate(self, samples, **kwargs):
+    def calibrate(self, samples_a, samples_b, **kwargs):
         """Calibrate the model on the provided data.
 
         Args:
@@ -315,14 +326,14 @@ class Model(ABC):
             lr (float): Learning rate. Defaults to 1e-3.
         """
         restart = kwargs.get("restart", False)
-        self.ndims = samples.shape[-1]
+        self.ndims = samples_a.shape[-1]
         # data = self.chains.sample(200).to_numpy()[..., :-3]
         if (not self.calibrate_state) | restart:
             self._init_calibrate_state(**kwargs)
         # self._init_state=self._init_state.replace(grads=jax.tree_map(jnp.zeros_like, self._init_state.params))
         # self.state.params.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
         # self.state.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
-        self._train_calibrator(samples, **kwargs)
+        self._train_calibrator(samples_a, samples_b, **kwargs)
         self._predict_weight = lambda x: self.calibrate_state.apply_fn(
             {
                 "params": self.calibrate_state.params,
