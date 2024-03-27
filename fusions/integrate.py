@@ -23,7 +23,7 @@ from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
 from fusions.model import Model
-from fusions.utils import unit_hyperball, unit_hypercube
+from fusions.utils import ellipse, unit_hyperball, unit_hypercube
 from jax import random
 
 
@@ -59,6 +59,22 @@ class Stats:
 
 @dataclass
 class Settings:
+    """Settings for the integrator.
+
+    Args:
+        n (int, optional): Number of samples to draw. Defaults to 500.
+        target_eff (float, optional): Target efficiency. Defaults to 0.1.
+        steps (int, optional): Number of steps to take. Defaults to 20.
+        prior_boost (int, optional): Number of samples to draw from the prior. Defaults to 5.
+        eps (float, optional): Tolerance for the termination criterion. Defaults to 1e-3.
+        batch_size (float, optional): Batch size for training the diffusion. Defaults to 0.25.
+        epoch_factor (int, optional): Factor to multiply the number of epochs by. Defaults to 1.
+        restart (bool, optional): Whether to restart the training. Defaults to False.
+        noise (float, optional): Noise to add to the training. Defaults to 1e-3.
+        efficiency (float, optional): Efficiency. Defaults to 1 / np.e.
+        logzero (float, optional): Value to use for log zero. Defaults to -1e30.
+    """
+
     n: int = 500
     target_eff: float = 0.1
     steps: int = 20
@@ -92,6 +108,7 @@ class Settings:
 class Trace:
     diff: Point = field(default_factory=dict)
     live: Point = field(default_factory=dict)
+    prior: Point = field(default_factory=dict)
     accepted_live: Point = field(default_factory=dict)
     iteration: list[int] = field(default_factory=list)
     losses: list[float] = field(default_factory=dict)
@@ -119,9 +136,15 @@ class Integrator(ABC):
 
     def sample(self, n, dist, logl_birth=0.0, beta=1.0):
         if isinstance(dist, Model):
-            x, j = dist.rvs(n, jac=True, solution="none")
+            # n = int(n * 10)
+            # x, j = dist.rvs(n, jac=True, solution="exact")
+            logging.log(logging.INFO, f"Sampling {n} points")
+            x = dist.rvs(n, jac=False)
             x = np.asarray(x)
             w = np.ones(n)
+            # log_pi = self.prior.logpdf(x)
+            # w = dist.predict_weight(x).flatten()
+            # w = np.exp(j)
         else:
             x = np.asarray(dist.rvs(n))
             w = np.ones(n)
@@ -189,7 +212,7 @@ class NestedDiffusion(Integrator):
             pi = self.sample(n, dist, constraint, **kwargs)
             batch_success += [p for p in pi if p.logl > constraint]
             success += batch_success
-            trials += n
+            trials += len(pi)
         eff = len(success) / trials
         return eff > efficiency, eff, success
 
@@ -215,40 +238,69 @@ class NestedDiffusion(Integrator):
         self.dist = self.prior
         self.update_stats(live, n)
         logger.info(f"{self.stats}")
-        diffuser = self.model(self.latent, noise=1e-3)
-        diffuser.rng, _ = random.split(diffuser.rng)
+        self.dist = self.model(self.latent, noise=1e-3)
+
+        # self.dist = self.train_diffuser(diffuser, live)
+
+        # diffuser.rng, _ = random.split(diffuser.rng)
 
         while not self.points_to_samples(live + self.dead).terminated(
             "logZ", self.settings.eps
         ):
+            # dist = self.model(ellipse(live))
+            dist = self.model(self.prior)
+            self.dist = self.train_diffuser(dist, live)
+            x = self.dist.rvs(len(live))
+            self.dist.calibrate(
+                np.asarray([yi.x for yi in live]),
+                np.asarray(x),
+                n_epochs=len(live) * 5,
+                batch_size=n // 2,
+                restart=True,
+            )
+            self.trace.losses[step] = self.dist.trace.losses
+
+            # live, contour = self.stash(live, n//2, drop=False)
+            # self.dist = self.train_diffuser(self.dist, live)
             success, eff, points = self.sample_constrained(
                 n // 2,
                 self.dist,
                 contour,
                 efficiency=self.settings.target_eff,
             )
+            logger.info(f"Efficiency at: {eff}, using previous diffusion")
+
             self.trace.live[step] = live
-            live = live + points
             self.trace.accepted_live[step] = points
-            live, contour = self.stash(live, n // 2)
+            self.trace.prior[step] = self.dist.prior.rvs(n)
+            live = live + points
+            live, contour = self.stash(live, n // 2, drop=False)
+
+            # self.dist = self.train_diffuser(self.dist, live)
+            # x = self.dist.rvs(len(live))
+            # self.dist.calibrate(np.asarray([yi.x for yi in live]), np.asarray(x), n_epochs=len(live) * 5, batch_size=n//2, restart =True)
+            # self.trace.losses[step] = self.dist.trace.losses
+
+            # live, contour = self.stash(live, n // 2)
             # x = self.dist.rvs(len(live))
             # self.trace.diff[step] = x
             # t = np.asarray([yi.x for yi in live])
             # self.dist.calibrate(np.asarray([yi.x for yi in live]), np.asarray(x), n_epochs=len(live) * 5, batch_size=n, restart =True)
 
-            if success:
-                logger.info(f"Efficiency at: {eff}, using previous diffusion")
-            if not success:
-                logger.info(f"Efficiency dropped to: {eff}, training new diffusion")
-                diffuser = self.train_diffuser(diffuser, points)
-                self.trace.losses[step] = diffuser.trace.losses
-                self.dists.append(diffuser)
-                self.dist = diffuser
+            # if success:
+            #     logger.info(f"Efficiency at: {eff}, using previous diffusion")
+            # if not success:
+            #     logger.info(f"Efficiency dropped to: {eff}, training new diffusion")
+            #     diffuser = self.train_diffuser(diffuser, live)
+            #     self.trace.losses[step] = diffuser.trace.losses
+            #     self.dists.append(diffuser)
+            #     self.dist = diffuser
 
             self.update_stats(live, n)
             logger.info(f"{self.stats}")
             step += 1
             self.trace.iteration.append(step)
+            dump(self.trace, open("plots/trace.pkl", "wb"))
 
             logger.info(f"Step {step} complete")
 

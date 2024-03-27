@@ -220,13 +220,16 @@ class Model(ABC):
 
     def _init_state(self, **kwargs):
         """Initialise the state of the training."""
-        # prev_params = kwargs.get("params", None)
+        prev_params = kwargs.get("params", None)
+        prev_stats = kwargs.get("batch_stats", None)
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
-
-        _params = self.score_model().init(self.rng, dummy_x, dummy_t, train=False)
-        # if prev_params:
-        #     _params["params"] = _params.replace(params=prev_params)
+        self.rng, step_rng = random.split(self.rng)
+        _params = self.score_model().init(step_rng, dummy_x, dummy_t, train=False)
+        if prev_params:
+            _params = {}
+            _params["params"] = prev_params
+            _params["batch_stats"] = prev_stats
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -290,6 +293,7 @@ class Model(ABC):
             lr (float): Learning rate. Defaults to 1e-3.
         """
         restart = kwargs.get("restart", False)
+        self.noise = kwargs.get("noise", 1e-3)
         self.ndims = data.shape[-1]
         if not self.prior:
             self.prior = multivariate_normal(
@@ -298,9 +302,15 @@ class Model(ABC):
         # data = self.chains.sample(200).to_numpy()[..., :-3]
         if (not self.state) | restart:
             self._init_state(**kwargs)
+        else:
+            self._init_state(
+                params=self.state.params, batch_stats=self.state.batch_stats
+            )
         # self._init_state=self._init_state.replace(grads=jax.tree_map(jnp.zeros_like, self._init_state.params))
         # self.state.params.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
         # self.state.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
+        # lr = kwargs.get("lr", 1e-3)
+        # self.state.tx = optax.adam(lr)
         self._train(data, **kwargs)
         self._predict = lambda x, t: self.state.apply_fn(
             {
