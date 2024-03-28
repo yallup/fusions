@@ -1,18 +1,18 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-import anesthetic as ns
-import optax
-from flax import linen as nn
-from scipy.stats import multivariate_normal
-from tqdm import tqdm
-
 import jax
 import jax.numpy as jnp
 import jax.random as random
+import optax
+from flax import linen as nn
+from jax import jit
+from scipy.stats import multivariate_normal
+from tqdm import tqdm
+
+import anesthetic as ns
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
-from jax import jit
 
 
 @dataclass
@@ -226,10 +226,12 @@ class Model(ABC):
         dummy_t = jnp.ones((1, 1))
         self.rng, step_rng = random.split(self.rng)
         _params = self.score_model().init(step_rng, dummy_x, dummy_t, train=False)
+        stats = _params["batch_stats"]
         if prev_params:
             _params = {}
             _params["params"] = prev_params
-            _params["batch_stats"] = prev_stats
+            _params["batch_stats"] = stats
+            # _params["batch_stats"] = prev_stats
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
