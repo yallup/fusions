@@ -84,6 +84,8 @@ class Settings:
     epoch_factor: int = 1
     restart: bool = False
     noise: float = 1e-3
+    resume: bool = False
+    dirname: str = "fusions_samples"
     # efficiency: float = 1 / np.e
     # logzero: float = -1e30
 
@@ -99,6 +101,7 @@ class Settings:
             f"  epoch_factor: {self.epoch_factor},\n"
             f"  restart: {self.restart},\n"
             f"  noise: {self.noise},\n"
+            f"  resume: {self.resume},\n"
             # f"  efficiency: {self.efficiency},\n"
             f")"
         )
@@ -130,9 +133,7 @@ class Integrator(ABC):
         self.dim = prior.dim
         self.rng = kwargs.get("rng", random.PRNGKey(0))
         self.trace = Trace()
-        # self.latent = multivariate_normal(
-        #     np.zeros(prior.dim), np.eye(prior.dim)
-        # )
+        self.latent = multivariate_normal(np.zeros(prior.dim), np.eye(prior.dim))
 
     def sample(self, n, dist, logl_birth=0.0, beta=1.0):
         if isinstance(dist, Model):
@@ -144,7 +145,8 @@ class Integrator(ABC):
             w = np.ones(n)
             # log_pi = self.prior.logpdf(x)
             # w = dist.predict_weight(x).flatten()
-            # w = np.exp(j)
+            # print(w.mean(),w.std())
+            # w = np.exp(j+log_pi)
         else:
             x = np.asarray(dist.rvs(n))
             w = np.ones(n)
@@ -229,6 +231,9 @@ class NestedDiffusion(Integrator):
 
     def run(self):
         print(self.settings)
+        # if settings.resume:
+        #     try:
+        #         points = self.read()
         n = self.settings.n
         live = self.sample(n * self.settings.prior_boost, self.prior, self.logzero)
 
@@ -251,6 +256,7 @@ class NestedDiffusion(Integrator):
             dist = self.model(self.prior)
             self.dist = self.train_diffuser(dist, live)
             x = self.dist.rvs(len(live))
+            self.trace.diff[step] = np.asarray(x)
             self.dist.calibrate(
                 np.asarray([yi.x for yi in live]),
                 np.asarray(x),

@@ -1,18 +1,18 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-import jax
-import jax.numpy as jnp
-import jax.random as random
+import anesthetic as ns
 import optax
 from flax import linen as nn
-from jax import jit
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
-import anesthetic as ns
+import jax
+import jax.numpy as jnp
+import jax.random as random
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
+from jax import jit
 
 
 @dataclass
@@ -84,6 +84,7 @@ class Model(ABC):
             steps=steps,
             solution=solution,
         )  # , step_rng)
+        x = x.squeeze() * self.std + self.mean
         if jac:
             return x.squeeze(), j.squeeze()
         else:
@@ -297,6 +298,11 @@ class Model(ABC):
         restart = kwargs.get("restart", False)
         self.noise = kwargs.get("noise", 1e-3)
         self.ndims = data.shape[-1]
+        self.mean = data.mean(axis=0)
+        self.std = data.std(axis=0)
+
+        data = (data - self.mean) / self.std
+
         if not self.prior:
             self.prior = multivariate_normal(
                 key=random.PRNGKey(0), mean=jnp.zeros(self.ndims)

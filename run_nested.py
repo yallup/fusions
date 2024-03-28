@@ -17,10 +17,10 @@ os.makedirs("plots", exist_ok=True)
 dims = 5
 data_dims = dims * 2
 # v hard
-np.random.seed(12345)
+np.random.seed(1234567)
 # np.random.seed(1)
 
-mixtures = 1
+mixtures = 10
 A = np.random.randn(mixtures, data_dims, dims)
 TargetModel = MixtureModel(
     # M=np.stack([np.eye(dims), -np.eye(dims)]),
@@ -55,12 +55,13 @@ diffuser = NestedDiffusion(
     prior=TargetModel.prior(), likelihood=likelihood(), model=CFM
 )
 diffuser.settings.target_eff = 1.0
-diffuser.settings.epoch_factor = 1.0
-diffuser.settings.n = 1000
-diffuser.settings.noise = 1e-3
+diffuser.settings.epoch_factor = 10.0
+diffuser.settings.n = 1500
+diffuser.settings.noise = 1e-1
+diffuser.settings.prior_boost = 10
 diffuser.settings.eps = 1e-3
 diffuser.settings.batch_size = 1000 // 2
-# diffuser.settings.restart=True
+diffuser.settings.restart = True
 # diffuser.run(steps=10, n=500)
 diffuser.run()
 samples = diffuser.samples()
