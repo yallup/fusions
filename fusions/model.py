@@ -1,18 +1,18 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-import anesthetic as ns
-import optax
-from flax import linen as nn
-from scipy.stats import multivariate_normal
-from tqdm import tqdm
-
 import jax
 import jax.numpy as jnp
 import jax.random as random
+import optax
+from flax import linen as nn
+from jax import jit, tree_map
+from scipy.stats import multivariate_normal
+from tqdm import tqdm
+
+import anesthetic as ns
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
-from jax import jit
 
 
 @dataclass
@@ -84,7 +84,7 @@ class Model(ABC):
             steps=steps,
             solution=solution,
         )  # , step_rng)
-        x = x.squeeze() * self.std + self.mean
+        # x = x.squeeze() * self.std + self.mean
         if jac:
             return x.squeeze(), j.squeeze()
         else:
@@ -136,6 +136,7 @@ class Model(ABC):
         self.trace = Trace()
         batch_size = kwargs.get("batch_size", 256)
         n_epochs = kwargs.get("n_epochs", data.shape[0])
+        prior_samples = kwargs.get("prior_samples", None)
 
         @jit
         def update_step(state, batch, batch_prior, rng):
@@ -147,8 +148,8 @@ class Model(ABC):
             return val, state
 
         train_size = data.shape[0]
-
-        prior_samples = jnp.array(self.prior.rvs(train_size * 100))
+        if prior_samples is None:
+            prior_samples = jnp.array(self.prior.rvs(train_size * 100))
         batch_size = min(batch_size, train_size)
 
         losses = []
@@ -227,12 +228,16 @@ class Model(ABC):
         dummy_t = jnp.ones((1, 1))
         self.rng, step_rng = random.split(self.rng)
         _params = self.score_model().init(step_rng, dummy_x, dummy_t, train=False)
+        params = _params["params"]
         stats = _params["batch_stats"]
         if prev_params:
             _params = {}
             _params["params"] = prev_params
-            _params["batch_stats"] = stats
-            # _params["batch_stats"] = prev_stats
+            # _params["params"] = params
+            # _params["batch_stats"] = stats
+            # last_layer = list(_params["params"].keys())[-1]
+            # _params["params"][last_layer] = tree_map(jnp.zeros_like,_params["params"][last_layer])
+            _params["batch_stats"] = prev_stats
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]
@@ -301,7 +306,7 @@ class Model(ABC):
         self.mean = data.mean(axis=0)
         self.std = data.std(axis=0)
 
-        data = (data - self.mean) / self.std
+        # data = (data - self.mean) / self.std
 
         if not self.prior:
             self.prior = multivariate_normal(

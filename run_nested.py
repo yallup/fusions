@@ -1,6 +1,5 @@
 import os
 
-import anesthetic as ns
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -8,6 +7,7 @@ import numpy as np
 from lsbi.model import LinearModel, MixtureModel
 from scipy.stats import multivariate_normal, norm, uniform
 
+import anesthetic as ns
 from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
 from fusions.integrate import NestedDiffusion, SequentialDiffusion
@@ -17,7 +17,7 @@ os.makedirs("plots", exist_ok=True)
 dims = 5
 data_dims = dims * 2
 # v hard
-np.random.seed(1234567)
+np.random.seed(123456)
 # np.random.seed(1)
 
 mixtures = 10
@@ -31,13 +31,28 @@ TargetModel = MixtureModel(
     C=np.ones(data_dims) * 0.01**2,
 )
 
-TargetModel = LinearModel(M=np.random.randn(data_dims, dims), C=0.01)
+TargetModel = LinearModel(M=np.random.randn(data_dims, dims), C=0.1)
+
+np.random.seed(123456)
+data_dims = dims
+A = np.random.rand(mixtures, data_dims, dims)
+# A /= np.linalg.norm(A, axis=2)[:, :, None]
+# A *=.008
+TargetModel = MixtureModel(
+    # M=np.stack([np.eye(dims), -np.eye(dims)]),
+    M=A,
+    mu=np.zeros(dims),
+    Sigma=np.eye(dims),
+    m=np.zeros(data_dims),
+    C=np.ones(data_dims) * 0.05**2,
+)
 
 # os.mkdir("nessai", exist_ok=True)
 
 
 data = TargetModel.evidence().rvs()
 logz = TargetModel.evidence().logpdf(data)
+print(logz)
 
 
 class likelihood(object):
@@ -56,16 +71,17 @@ diffuser = NestedDiffusion(
 )
 diffuser.settings.target_eff = 1.0
 diffuser.settings.epoch_factor = 10.0
-diffuser.settings.n = 1500
-diffuser.settings.noise = 1e-1
-diffuser.settings.prior_boost = 10
-diffuser.settings.eps = 1e-3
-diffuser.settings.batch_size = 1000 // 2
+diffuser.settings.n = 1000
+diffuser.settings.noise = 1e-2
+diffuser.settings.prior_boost = 5
+diffuser.settings.eps = 1e-2
+diffuser.settings.batch_size = 128
 diffuser.settings.restart = True
+diffuser.settings.lr = 10**-2
 # diffuser.run(steps=10, n=500)
 diffuser.run()
 samples = diffuser.samples()
-diffuser.write(os.path.join("plots", "diffusion"))
+diffuser.write("diffusion")
 print(f"analytic: {logz:.2f}")
 zs = samples.logZ(50)
 print(f"numerical estimation: {zs.mean():.2f} +- {zs.std():.2f}")

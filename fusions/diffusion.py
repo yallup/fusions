@@ -2,9 +2,10 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from fusions.model import Model
 from jax import grad, jit, random, vmap
 from jax.lax import scan
+
+from fusions.model import Model
 
 
 class Diffusion(Model):
@@ -105,7 +106,7 @@ class Diffusion(Model):
         vs = self.var(t)
         stds = jnp.sqrt(vs)
         rng, step_rng = random.split(rng)
-        noise = batch_prior
+        noise = batch_prior + self.noise * random.normal(step_rng, batch.shape)
         # noise = batch_prior + random.normal(step_rng, batch.shape)
         # noise = random.normal(step_rng, batch.shape)
         xt = batch * mean_coeff + noise * stds

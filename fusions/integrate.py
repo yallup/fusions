@@ -11,25 +11,26 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pickle import dump, load
 
-import anesthetic.termination as term
 import matplotlib.pyplot as plt
 import numpy as np
-from anesthetic import MCMCSamples, NestedSamples, make_2d_axes, read_chains
-from anesthetic.utils import compress_weights, neff
+from jax import random
 
 # from anesthetic.read.hdf import read_hdf, write_hdf
 from scipy.special import logsumexp
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
+import anesthetic.termination as term
+from anesthetic import MCMCSamples, NestedSamples, make_2d_axes, read_chains
+from anesthetic.utils import compress_weights, neff
 from fusions.model import Model
 from fusions.utils import ellipse, unit_hyperball, unit_hypercube
-from jax import random
 
 
 @dataclass
 class Point:
     x: np.ndarray
+    latent_x: np.ndarray
     logl: float
     logl_birth: float
     logl_pi: float = field(default=0.0)
@@ -86,6 +87,7 @@ class Settings:
     noise: float = 1e-3
     resume: bool = False
     dirname: str = "fusions_samples"
+    lr: float = 1e-3
     # efficiency: float = 1 / np.e
     # logzero: float = -1e30
 
@@ -115,6 +117,7 @@ class Trace:
     accepted_live: Point = field(default_factory=dict)
     iteration: list[int] = field(default_factory=list)
     losses: list[float] = field(default_factory=dict)
+    efficiency: list[float] = field(default_factory=list)
 
 
 class Integrator(ABC):
@@ -127,29 +130,36 @@ class Integrator(ABC):
         self.stats = Stats()
         self.settings = Settings()
         self.model = kwargs.get("model", CFM)
-        latent = kwargs.get("latent", unit_hyperball)
+        # latent = kwargs.get("latent", unit_hyperball)
         # latent = multivariate_normal(mean=np.zeros(prior.dim), cov=np.eye(prior.dim))
-        self.latent = latent(prior.dim, scale=1.0)
+        # self.latent = latent(prior.dim, scale=1.0)
         self.dim = prior.dim
         self.rng = kwargs.get("rng", random.PRNGKey(0))
         self.trace = Trace()
-        self.latent = multivariate_normal(np.zeros(prior.dim), np.eye(prior.dim))
+        # self.prior = multivariate_normal(
+        #     np.zeros(prior.dim), np.eye(prior.dim)
+        # )
+        self.latent = multivariate_normal(np.zeros(prior.dim), np.eye(prior.dim) * 1e-3)
 
     def sample(self, n, dist, logl_birth=0.0, beta=1.0):
         if isinstance(dist, Model):
             # n = int(n * 10)
+            # n=int(n*5)
             # x, j = dist.rvs(n, jac=True, solution="exact")
             logging.log(logging.INFO, f"Sampling {n} points")
-            x = dist.rvs(n, jac=False)
+            latent_x = dist.prior.rvs(n)
+            x = dist.predict(latent_x, jac=False)
             x = np.asarray(x)
-            w = np.ones(n)
+            latent_x = np.asarray(latent_x)
+            # w = np.ones(n)
             # log_pi = self.prior.logpdf(x)
-            # w = dist.predict_weight(x).flatten()
+            w = dist.predict_weight(x).flatten()
             # print(w.mean(),w.std())
             # w = np.exp(j+log_pi)
         else:
             x = np.asarray(dist.rvs(n))
             w = np.ones(n)
+            latent_x = x
         log_pi = self.prior.logpdf(x)
 
         idx = compress_weights(w.flatten(), ncompress="equal")
@@ -161,6 +171,7 @@ class Integrator(ABC):
         points = [
             Point(
                 x[idx][i],
+                latent_x[idx][i],
                 logl[idx][i],
                 logl_birth[idx][i],
                 logl_pi=log_pi[idx][i],
@@ -174,8 +185,9 @@ class Integrator(ABC):
         if not drop:
             self.dead += live[n:]
         contour = live[n].logl
+        r = np.linalg.norm(live[n].latent_x)
         live = live[:n]
-        return live, contour
+        return live, contour, r
 
     @abstractmethod
     def run(self, **kwargs):
@@ -199,10 +211,20 @@ class Integrator(ABC):
         return logsumexp(likelihood + prior) - np.log(n)
 
     def write(self, filename):
-        self.points_to_samples(self.dead).to_csv(filename + ".csv")
+        os.makedirs(self.settings.dirname, exist_ok=True)
+        self.points_to_samples(self.dead).to_csv(
+            os.path.join(self.settings.dirname, filename) + ".csv"
+        )
 
     def read(self, filename):
         self.dead = read_chains(filename)
+
+    def write_trace(self, filename):
+        os.makedirs(self.settings.dirname, exist_ok=True)
+        dump(
+            self.trace,
+            open(os.path.join(self.settings.dirname, filename) + ".pkl", "wb"),
+        )
 
 
 class NestedDiffusion(Integrator):
@@ -218,14 +240,16 @@ class NestedDiffusion(Integrator):
         eff = len(success) / trials
         return eff > efficiency, eff, success
 
-    def train_diffuser(self, dist, points):
+    def train_diffuser(self, dist, points, prior_samples=None):
         dist.train(
             np.asarray([yi.x for yi in points]),
             n_epochs=int(len(points) * self.settings.epoch_factor),
-            batch_size=int(len(points) * self.settings.batch_size),
-            lr=1e-3,
+            # batch_size=int(len(points) * self.settings.batch_size),
+            batch_size=self.settings.batch_size,
+            lr=self.settings.lr,
             restart=self.settings.restart,
             noise=self.settings.noise,
+            prior_samples=prior_samples,
         )
         return dist
 
@@ -239,38 +263,67 @@ class NestedDiffusion(Integrator):
 
         step = 0
         logger.info("Done sampling prior")
-        live, contour = self.stash(live, n // 2, drop=False)
+        live, contour, r = self.stash(live, n // 2, drop=False)
         self.dist = self.prior
         self.update_stats(live, n)
         logger.info(f"{self.stats}")
         self.dist = self.model(self.latent, noise=1e-3)
-
+        dists = []
         # self.dist = self.train_diffuser(diffuser, live)
 
         # diffuser.rng, _ = random.split(diffuser.rng)
-
+        r_true = 1.0
         while not self.points_to_samples(live + self.dead).terminated(
             "logZ", self.settings.eps
         ):
             # dist = self.model(ellipse(live))
-            dist = self.model(self.prior)
-            self.dist = self.train_diffuser(dist, live)
-            x = self.dist.rvs(len(live))
-            self.trace.diff[step] = np.asarray(x)
-            self.dist.calibrate(
-                np.asarray([yi.x for yi in live]),
+            # print(r_true)
+
+            class flow(object):
+                def __init__(self, dists, prior):
+                    self.dists = dists
+                    self.prior = prior
+
+                def logpdf(self, x):
+                    return self.prior.logpdf(x)
+
+                def rvs(self, n):
+                    x = self.prior.rvs(n)
+                    for d in self.dists:
+                        x = d.predict(x)
+                    return x
+
+                def __call__(self, x):
+                    self
+                    for d in self.dists:
+                        x = d.predict(x)
+                    return x
+
+            f = flow(dists, self.prior)
+            dist = self.model(f)
+            # x_prior = self.prior.rvs(n*10)
+            prior_samples = f.rvs(len(live) // 2)
+            # dist = self.model(unit_hyperball(self.dim, scale = r_true))
+            # r_true/=2
+            xi, ci = np.random.choice(len(live), (2, len(live) // 2), replace=False)
+            dist = self.train_diffuser(dist, np.asarray(live)[xi], prior_samples)
+            # x = dist.predict(prior_samples)
+            x = dist.rvs(len(live) // 2)
+            # self.trace.diff[step] = np.asarray(x)
+            dist.calibrate(
+                np.asarray([yi.x for yi in np.asarray(live)[ci]]),
                 np.asarray(x),
                 n_epochs=len(live) * 5,
                 batch_size=n // 2,
                 restart=True,
             )
-            self.trace.losses[step] = self.dist.trace.losses
+            self.trace.losses[step] = dist.trace.losses
 
             # live, contour = self.stash(live, n//2, drop=False)
             # self.dist = self.train_diffuser(self.dist, live)
             success, eff, points = self.sample_constrained(
                 n // 2,
-                self.dist,
+                dist,
                 contour,
                 efficiency=self.settings.target_eff,
             )
@@ -280,7 +333,8 @@ class NestedDiffusion(Integrator):
             self.trace.accepted_live[step] = points
             self.trace.prior[step] = self.dist.prior.rvs(n)
             live = live + points
-            live, contour = self.stash(live, n // 2, drop=False)
+            live, contour, r = self.stash(live, n // 2, drop=False)
+            dists.append(dist)
 
             # self.dist = self.train_diffuser(self.dist, live)
             # x = self.dist.rvs(len(live))
@@ -306,12 +360,13 @@ class NestedDiffusion(Integrator):
             logger.info(f"{self.stats}")
             step += 1
             self.trace.iteration.append(step)
-            dump(self.trace, open("plots/trace.pkl", "wb"))
+            self.trace.efficiency.append(eff)
+            self.write_trace("trace")
 
             logger.info(f"Step {step} complete")
 
         self.stash(live, -len(live))
-        dump(self.trace, open("plots/trace.pkl", "wb"))
+        self.write_trace("trace")
         logger.info(f"Final stats: {self.stats}")
 
     def update_stats(self, live, n):

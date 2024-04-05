@@ -65,8 +65,10 @@ class Classifier(nn.Module):
 class ScoreApprox(nn.Module):
     """A simple model with multiple fully connected layers and some fourier features for the time variable."""
 
-    n_initial: int = 256
+    n_initial: int = 128
     n_hidden: int = 32
+    encode_fourier_features: bool = True
+    n_fourier_features: int = 4
     n_layers: int = 3
     act = nn.leaky_relu
 
@@ -74,24 +76,28 @@ class ScoreApprox(nn.Module):
     def __call__(self, x, t, train: bool):
         in_size = x.shape[-1]
         # act = nn.relu
+        # y = nn.BatchNorm(use_running_average=not train)(x)
         # # t = jnp.concatenate([t - 0.5, jnp.cos(2 * jnp.pi * t)], axis=1)
-        t = jnp.concatenate(
-            [
-                t - 0.5,
-                jnp.cos(2 * jnp.pi * t),
-                jnp.sin(2 * jnp.pi * t),
-                -jnp.cos(4 * jnp.pi * t),
-            ],
-            axis=-1,
-        )
+        # encode 128 fourier features for the timestep
+        f = jnp.arange(1, self.n_fourier_features + 1)
+        t = jnp.concatenate([t - 0.5, jnp.sin(2 * jnp.pi * t * f)], axis=-1)
+        # t = jnp.concatenate(
+        #     [
+        #         t - 0.5,
+        #         jnp.cos(2 * jnp.pi * t),
+        #         jnp.sin(2 * jnp.pi * t),
+        #         -jnp.cos(4 * jnp.pi * t),
+        #     ],
+        #     axis=-1,
+        # )
         x = jnp.concatenate([x, t], axis=-1)
         x = nn.Dense(self.n_initial)(x)
         x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.silu(x)
+        x = nn.gelu(x)
         for i in range(self.n_layers):
             x = nn.Dense(self.n_hidden)(x)
             x = nn.BatchNorm(use_running_average=not train)(x)
-            x = nn.silu(x)
+            x = nn.gelu(x)
         x = nn.Dense(in_size, kernel_init=zeros_init)(x)
         return x
 
