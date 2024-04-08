@@ -72,12 +72,12 @@ diffuser = NestedDiffusion(
 diffuser.settings.target_eff = 1.0
 diffuser.settings.epoch_factor = 10.0
 diffuser.settings.n = 1000
-diffuser.settings.noise = 1e-2
-diffuser.settings.prior_boost = 5
-diffuser.settings.eps = 1e-2
+diffuser.settings.noise = 1e-3
+diffuser.settings.prior_boost = 1
+diffuser.settings.eps = 1e-3
 diffuser.settings.batch_size = 128
-diffuser.settings.restart = True
-diffuser.settings.lr = 10**-2
+diffuser.settings.restart = False
+diffuser.settings.lr = 1e-3
 # diffuser.run(steps=10, n=500)
 diffuser.run()
 samples = diffuser.samples()

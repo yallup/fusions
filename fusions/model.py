@@ -234,10 +234,10 @@ class Model(ABC):
             _params = {}
             _params["params"] = prev_params
             # _params["params"] = params
-            # _params["batch_stats"] = stats
+            _params["batch_stats"] = stats
             # last_layer = list(_params["params"].keys())[-1]
             # _params["params"][last_layer] = tree_map(jnp.zeros_like,_params["params"][last_layer])
-            _params["batch_stats"] = prev_stats
+            # _params["batch_stats"] = prev_stats
         lr = kwargs.get("lr", 1e-3)
         optimizer = optax.adam(lr)
         params = _params["params"]

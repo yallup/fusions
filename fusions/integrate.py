@@ -139,23 +139,26 @@ class Integrator(ABC):
         # self.prior = multivariate_normal(
         #     np.zeros(prior.dim), np.eye(prior.dim)
         # )
-        self.latent = multivariate_normal(np.zeros(prior.dim), np.eye(prior.dim) * 1e-3)
+        self.latent = multivariate_normal(np.zeros(prior.dim), np.eye(prior.dim))
 
     def sample(self, n, dist, logl_birth=0.0, beta=1.0):
         if isinstance(dist, Model):
             # n = int(n * 10)
             # n=int(n*5)
-            # x, j = dist.rvs(n, jac=True, solution="exact")
+            x, j = dist.rvs(n, jac=True, solution="exact")
             logging.log(logging.INFO, f"Sampling {n} points")
             latent_x = dist.prior.rvs(n)
-            x = dist.predict(latent_x, jac=False)
+            self.rng, key = random.split(self.rng)
+            # noise = random.normal(key, (n, self.dim)) * 1
+            # x = dist.predict(latent_x , jac=False)
             x = np.asarray(x)
             latent_x = np.asarray(latent_x)
-            # w = np.ones(n)
-            # log_pi = self.prior.logpdf(x)
-            w = dist.predict_weight(x).flatten()
+            w = np.ones(n)
+            log_pi = self.prior.logpdf(x)
+            # w = dist.predict_weight(x).flatten()
             # print(w.mean(),w.std())
-            # w = np.exp(j+log_pi)
+            w = np.exp(2 * log_pi - j)
+            # w=1/j
         else:
             x = np.asarray(dist.rvs(n))
             w = np.ones(n)
@@ -270,6 +273,7 @@ class NestedDiffusion(Integrator):
         self.dist = self.model(self.latent, noise=1e-3)
         dists = []
         # self.dist = self.train_diffuser(diffuser, live)
+        self.dist = self.model(self.prior, noise=self.settings.noise)
 
         # diffuser.rng, _ = random.split(diffuser.rng)
         r_true = 1.0
@@ -279,51 +283,64 @@ class NestedDiffusion(Integrator):
             # dist = self.model(ellipse(live))
             # print(r_true)
 
-            class flow(object):
-                def __init__(self, dists, prior):
-                    self.dists = dists
-                    self.prior = prior
+            # class flow(object):
+            #     def __init__(self, dists, prior):
+            #         self.dists = dists
+            #         self.prior = prior
 
-                def logpdf(self, x):
-                    return self.prior.logpdf(x)
+            #     def logpdf(self, x):
+            #         return self.prior.logpdf(x)
 
-                def rvs(self, n):
-                    x = self.prior.rvs(n)
-                    for d in self.dists:
-                        x = d.predict(x)
-                    return x
+            #     def rvs(self, n):
+            #         x = self.prior.rvs(n)
+            #         for d in self.dists:
+            #             x = d.predict(x)
+            #         return x
 
-                def __call__(self, x):
-                    self
-                    for d in self.dists:
-                        x = d.predict(x)
-                    return x
+            #     def __call__(self, x):
+            #         self
+            #         for d in self.dists:
+            #             x = d.predict(x)
+            #         return x
 
-            f = flow(dists, self.prior)
-            dist = self.model(f)
+            # f = flow(dists, self.prior)
+            # dist = self.model(f)
             # x_prior = self.prior.rvs(n*10)
-            prior_samples = f.rvs(len(live) // 2)
+            # prior_samples = f.rvs(len(live) // 2)
             # dist = self.model(unit_hyperball(self.dim, scale = r_true))
             # r_true/=2
-            xi, ci = np.random.choice(len(live), (2, len(live) // 2), replace=False)
-            dist = self.train_diffuser(dist, np.asarray(live)[xi], prior_samples)
+            xi = np.random.choice(len(live), int(1.0 * len(live)), replace=False)
+            # xi, ci = np.random.choice(len(live), (2, len(live) // 2), replace=False)
+            # dist = self.train_diffuser(dist, np.asarray(live)[xi], prior_samples)
             # x = dist.predict(prior_samples)
-            x = dist.rvs(len(live) // 2)
+            # x = self.dist.rvs(len(live) // 2)
+            # # self.trace.diff[step] = np.asarray(x)
+            # self.dist.calibrate(
+            #     np.asarray([yi.x for yi in np.asarray(live)[ci]]),
+            #     np.asarray(x),
+            #     n_epochs=len(live) * 5,
+            #     batch_size=n // 2,
+            #     restart=True,
+            # )
+            # self.dist = self.train_diffuser(self.dist, np.asarray(live)[xi])
+            self.dist = self.train_diffuser(self.dist, live)
+
+            # x = self.dist.rvs(len(live) // 2)
             # self.trace.diff[step] = np.asarray(x)
-            dist.calibrate(
-                np.asarray([yi.x for yi in np.asarray(live)[ci]]),
-                np.asarray(x),
-                n_epochs=len(live) * 5,
-                batch_size=n // 2,
-                restart=True,
-            )
-            self.trace.losses[step] = dist.trace.losses
+            # self.dist.calibrate(
+            #     np.asarray([yi.x for yi in np.asarray(live)[ci]]),
+            #     np.asarray(x),
+            #     n_epochs=len(live) * 5,
+            #     batch_size=n // 2,
+            #     restart=True,
+            # )
+            self.trace.losses[step] = self.dist.trace.losses
 
             # live, contour = self.stash(live, n//2, drop=False)
             # self.dist = self.train_diffuser(self.dist, live)
             success, eff, points = self.sample_constrained(
                 n // 2,
-                dist,
+                self.dist,
                 contour,
                 efficiency=self.settings.target_eff,
             )
@@ -334,7 +351,7 @@ class NestedDiffusion(Integrator):
             self.trace.prior[step] = self.dist.prior.rvs(n)
             live = live + points
             live, contour, r = self.stash(live, n // 2, drop=False)
-            dists.append(dist)
+            # dists.append(dist)
 
             # self.dist = self.train_diffuser(self.dist, live)
             # x = self.dist.rvs(len(live))
