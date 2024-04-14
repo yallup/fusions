@@ -2,15 +2,14 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from fusions.model import Model
 from jax import grad, jit, random, vmap
 from jax.lax import scan
-
-from fusions.model import Model
 
 
 class Diffusion(Model):
     beta_min: float = 1e-3
-    beta_max: float = 3.0
+    beta_max: float = 1
     steps: int = 1000
     train_ts = jnp.arange(1, steps) / (steps - 1)
     # train_ts=jnp.geomspace(beta_min,beta_max,steps)
@@ -106,8 +105,9 @@ class Diffusion(Model):
         vs = self.var(t)
         stds = jnp.sqrt(vs)
         rng, step_rng = random.split(rng)
-        noise = batch_prior + self.noise * random.normal(step_rng, batch.shape)
-        # noise = batch_prior + random.normal(step_rng, batch.shape)
+        # noise = random.normal(step_rng, batch.shape)
+        # noise = batch_prior  # + self.noise * random.normal(step_rng, batch.shape)
+        noise = batch_prior  # + random.normal(step_rng, batch.shape)
         # noise = random.normal(step_rng, batch.shape)
         xt = batch * mean_coeff + noise * stds
         output, updates = self.state.apply_fn(

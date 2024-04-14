@@ -66,6 +66,8 @@ class CFM(Model):
             # term = dfx.ODETerm(score_args_exact)
             # solver = dfx.Heun()
             solver = dfx.Dopri5()
+            # solver = dfx.Dopri8()
+            # solver = dfx.Tsit5()
 
             solver_approx
 

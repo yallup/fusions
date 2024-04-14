@@ -1,5 +1,6 @@
 import os
 
+import anesthetic as ns
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -7,7 +8,6 @@ import numpy as np
 from lsbi.model import LinearModel, MixtureModel
 from scipy.stats import multivariate_normal, norm, uniform
 
-import anesthetic as ns
 from fusions.cfm import CFM
 from fusions.diffusion import Diffusion
 from fusions.integrate import NestedDiffusion, SequentialDiffusion
@@ -15,7 +15,7 @@ from fusions.integrate import NestedDiffusion, SequentialDiffusion
 os.makedirs("plots", exist_ok=True)
 
 dims = 5
-data_dims = dims * 2
+data_dims = dims
 # v hard
 np.random.seed(123456)
 # np.random.seed(1)
@@ -24,28 +24,52 @@ mixtures = 10
 A = np.random.randn(mixtures, data_dims, dims)
 TargetModel = MixtureModel(
     # M=np.stack([np.eye(dims), -np.eye(dims)]),
-    M=A,
+    # M=A,
+    M=np.stack([np.eye(dims), -np.eye(dims)]),
     mu=np.zeros(dims),
     Sigma=np.eye(dims),
     m=np.zeros(data_dims),
-    C=np.ones(data_dims) * 0.01**2,
+    C=np.ones(data_dims) * 0.01,
 )
+data_dims = dims * 2
 
-TargetModel = LinearModel(M=np.random.randn(data_dims, dims), C=0.1)
+# class gaussian_ring(object):
+#     """
+#     Implements a gaussian ring in arbitrary n dimensions, and provides a logpdf function.
+#     """
 
-np.random.seed(123456)
-data_dims = dims
-A = np.random.rand(mixtures, data_dims, dims)
-# A /= np.linalg.norm(A, axis=2)[:, :, None]
-# A *=.008
-TargetModel = MixtureModel(
-    # M=np.stack([np.eye(dims), -np.eye(dims)]),
-    M=A,
-    mu=np.zeros(dims),
-    Sigma=np.eye(dims),
-    m=np.zeros(data_dims),
-    C=np.ones(data_dims) * 0.05**2,
-)
+#         def __init__(self, dims, r=1.0, sigma=0.1):
+#             self.dims = dims
+#             self.r = r
+#             self.sigma = sigma
+
+#         def logpdf(self, x):
+#             x = np.atleast_2d(x)
+#             assert x.shape[1] == self.dims
+#             r = np.sqrt(np.sum(x**2, axis=1))
+#             return norm.logpdf(r, loc=self.r, scale=self.sigma)
+
+#         def rvs(self, size):
+#             x = np.random.randn(size, self.dims)
+#             x /= np.linalg.norm(x, axis=1)[:, None]
+#             x *= self.r
+#             return x
+
+TargetModel = LinearModel(M=np.random.randn(data_dims, dims), C=0.01)
+
+# np.random.seed(123456)
+# data_dims = dims
+# A = np.random.rand(mixtures, data_dims, dims)
+# # A /= np.linalg.norm(A, axis=2)[:, :, None]
+# # A *=.008
+# TargetModel = MixtureModel(
+#     # M=np.stack([np.eye(dims), -np.eye(dims)]),
+#     M=A,
+#     mu=np.zeros(dims),
+#     Sigma=np.eye(dims),
+#     m=np.zeros(data_dims),
+#     C=np.ones(data_dims) * 0.05**2,
+# )
 
 # os.mkdir("nessai", exist_ok=True)
 
@@ -63,21 +87,28 @@ class likelihood(object):
         return TargetModel.likelihood(x).logpdf(data)
 
 
+from fusions.network import ScoreApprox
+
+network = ScoreApprox(n_initial=32, n_hidden=16, n_layers=3, n_fourier_features=4)
 # diffuser = SequentialDiffusion(
 #     prior=Model.prior(), likelihood=likelihood()# , schedule =np.geomspace
 # )
+model = CFM
+
+model = Diffusion
 diffuser = NestedDiffusion(
-    prior=TargetModel.prior(), likelihood=likelihood(), model=CFM
+    prior=TargetModel.prior(), likelihood=likelihood(), model=model
 )
 diffuser.settings.target_eff = 1.0
-diffuser.settings.epoch_factor = 10.0
-diffuser.settings.n = 1000
+diffuser.settings.epoch_factor = 15
+diffuser.settings.n = 5000
 diffuser.settings.noise = 1e-3
 diffuser.settings.prior_boost = 1
-diffuser.settings.eps = 1e-3
-diffuser.settings.batch_size = 128
+diffuser.settings.eps = 1e-2
+diffuser.settings.batch_size = 512
 diffuser.settings.restart = False
 diffuser.settings.lr = 1e-3
+diffuser.score_model = network
 # diffuser.run(steps=10, n=500)
 diffuser.run()
 samples = diffuser.samples()

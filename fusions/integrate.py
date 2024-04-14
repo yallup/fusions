@@ -11,20 +11,20 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pickle import dump, load
 
+import anesthetic.termination as term
 import matplotlib.pyplot as plt
 import numpy as np
-from jax import random
+from anesthetic import MCMCSamples, NestedSamples, make_2d_axes, read_chains
+from anesthetic.utils import compress_weights, neff
 
 # from anesthetic.read.hdf import read_hdf, write_hdf
 from scipy.special import logsumexp
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
-import anesthetic.termination as term
-from anesthetic import MCMCSamples, NestedSamples, make_2d_axes, read_chains
-from anesthetic.utils import compress_weights, neff
 from fusions.model import Model
 from fusions.utils import ellipse, unit_hyperball, unit_hypercube
+from jax import random
 
 
 @dataclass
@@ -43,7 +43,7 @@ class Stats:
     ndead: int = field(default=0)
     logz: float = field(default=-1e30)
     logz_err: float = field(default=1)
-    logX: float = field(default=0)
+    logX: float = field(default=1)
 
     def __repr__(self):
         return (
@@ -88,6 +88,7 @@ class Settings:
     resume: bool = False
     dirname: str = "fusions_samples"
     lr: float = 1e-3
+    gamma: float = 0.9
     # efficiency: float = 1 / np.e
     # logzero: float = -1e30
 
@@ -145,19 +146,19 @@ class Integrator(ABC):
         if isinstance(dist, Model):
             # n = int(n * 10)
             # n=int(n*5)
-            x, j = dist.rvs(n, jac=True, solution="exact")
+            # x, j = dist.rvs(n, jac=True, solution="exact")
             logging.log(logging.INFO, f"Sampling {n} points")
             latent_x = dist.prior.rvs(n)
             self.rng, key = random.split(self.rng)
             # noise = random.normal(key, (n, self.dim)) * 1
-            # x = dist.predict(latent_x , jac=False)
+            x = dist.predict(latent_x, jac=False)
             x = np.asarray(x)
             latent_x = np.asarray(latent_x)
             w = np.ones(n)
-            log_pi = self.prior.logpdf(x)
-            # w = dist.predict_weight(x).flatten()
+            # log_pi = self.prior.logpdf(x)
+            w = 1 - dist.predict_weight(x).flatten()
             # print(w.mean(),w.std())
-            w = np.exp(2 * log_pi - j)
+            # w = np.exp(2 * log_pi - j)
             # w=1/j
         else:
             x = np.asarray(dist.rvs(n))
@@ -275,10 +276,11 @@ class NestedDiffusion(Integrator):
         # self.dist = self.train_diffuser(diffuser, live)
         self.dist = self.model(self.prior, noise=self.settings.noise)
 
-        # diffuser.rng, _ = random.split(diffuser.rng)
+        # self.dist.rng, _ = random.split(self.dist.rng)
         r_true = 1.0
+        eff = 1.0
         while not self.points_to_samples(live + self.dead).terminated(
-            "logZ", self.settings.eps
+            criterion="logZ", eps=self.settings.eps
         ):
             # dist = self.model(ellipse(live))
             # print(r_true)
@@ -309,8 +311,8 @@ class NestedDiffusion(Integrator):
             # prior_samples = f.rvs(len(live) // 2)
             # dist = self.model(unit_hyperball(self.dim, scale = r_true))
             # r_true/=2
-            xi = np.random.choice(len(live), int(1.0 * len(live)), replace=False)
-            # xi, ci = np.random.choice(len(live), (2, len(live) // 2), replace=False)
+            # xi = np.random.choice(len(live), int(.9 * len(live)), replace=False)
+            xi, ci = np.random.choice(len(live), (2, len(live) // 2), replace=False)
             # dist = self.train_diffuser(dist, np.asarray(live)[xi], prior_samples)
             # x = dist.predict(prior_samples)
             # x = self.dist.rvs(len(live) // 2)
@@ -323,17 +325,25 @@ class NestedDiffusion(Integrator):
             #     restart=True,
             # )
             # self.dist = self.train_diffuser(self.dist, np.asarray(live)[xi])
+            # om = 1 ** ((np.floor(np.log10(r_true))))
+            # r_true *= eff
+            # self.dist.beta_min = om * 1e-3
+            # self.dist.beta_max = om
+            # print(self.dist.beta_min, self.dist.beta_max)
             self.dist = self.train_diffuser(self.dist, live)
+            # self.dist = self.train_diffuser(self.dist, live + self.dead[- n // 2:])
 
-            # x = self.dist.rvs(len(live) // 2)
+            x = self.dist.rvs(len(live))
+            # x = self.dist.rvs(len(np.asarray(live)[ci]))
             # self.trace.diff[step] = np.asarray(x)
-            # self.dist.calibrate(
-            #     np.asarray([yi.x for yi in np.asarray(live)[ci]]),
-            #     np.asarray(x),
-            #     n_epochs=len(live) * 5,
-            #     batch_size=n // 2,
-            #     restart=True,
-            # )
+            self.dist.calibrate(
+                # np.asarray([yi.x for yi in np.asarray(live)[ci]]),
+                np.asarray([yi.x for yi in live]),
+                np.asarray(x),
+                n_epochs=len(live) * 5,
+                batch_size=self.settings.batch_size,
+                restart=False,
+            )
             self.trace.losses[step] = self.dist.trace.losses
 
             # live, contour = self.stash(live, n//2, drop=False)
@@ -390,8 +400,10 @@ class NestedDiffusion(Integrator):
         running_samples = self.points_to_samples(self.dead + live)
         self.stats.ndead = len(self.dead)
         lZs = running_samples.logZ(100)
+        i_live = running_samples.live_points().index
+        self.stats.logX = np.exp(running_samples.logX().iloc[i_live[0]])
         # self.stats.logX = running_samples.critical_ratio()
-        running_samples.terminated()
+        # running_samples.terminated()
         self.stats.logz = lZs.mean()
         self.stats.logz_err = lZs.std()
 

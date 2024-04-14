@@ -1,18 +1,21 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-import jax
-import jax.numpy as jnp
-import jax.random as random
+import anesthetic as ns
 import optax
 from flax import linen as nn
-from jax import jit, tree_map
+from flax import traverse_util
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
-import anesthetic as ns
+import jax
+import jax.numpy as jnp
+import jax.random as random
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
+from jax import jit, tree_map
+
+# from optax.contrib import reduce_on_plateau
 
 
 @dataclass
@@ -56,7 +59,7 @@ class Model(ABC):
         Returns:
             jnp.ndarray: Samples from the prior distribution.
         """
-        return self.prior.rvs(n)
+        return self.prior.rvs(n).reshape(-1, self.ndims)
 
     def predict(self, initial_samples, **kwargs):
         """Run the diffusion model on user-provided samples.
@@ -143,13 +146,16 @@ class Model(ABC):
             (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
                 state.params, batch, batch_prior, state.batch_stats, rng
             )
-            state = state.apply_gradients(grads=grads)
+            state = state.apply_gradients(grads=grads, value=val)
             state = state.replace(batch_stats=updates["batch_stats"])
+            # state = state.replace(value=val)
             return val, state
 
         train_size = data.shape[0]
         if prior_samples is None:
-            prior_samples = jnp.array(self.prior.rvs(train_size * 100))
+            prior_samples = jnp.array(
+                self.prior.rvs(train_size * 100).reshape(-1, self.ndims)
+            )
         batch_size = min(batch_size, train_size)
 
         losses = []
@@ -161,11 +167,15 @@ class Model(ABC):
             batch = data[perm, :]
             batch_prior = prior_samples[perm_prior, :]
             loss, self.state = update_step(self.state, batch, batch_prior, step_rng)
-            self.trace.losses.append(loss)
-            self.trace.iteration += 1
+            # self.trace.losses.append(loss)
+            losses.append(loss)
+
             # losses.append(loss)
-            # if (k + 1) % 100 == 0:
-            #     mean_loss = jnp.mean(jnp.array(losses))
+            if (k + 1) % 10 == 0:
+                self.trace.losses.append(jnp.mean(jnp.array(losses[-100:])))
+                self.trace.iteration += 1
+
+            #     mean_loss = jnp.mean(jnp.array(losses[-10:]))
             #     self.state.losses.append((mean_loss, k))
             #     tepochs.set_postfix(loss=mean_loss)
 
@@ -230,6 +240,8 @@ class Model(ABC):
         _params = self.score_model().init(step_rng, dummy_x, dummy_t, train=False)
         params = _params["params"]
         stats = _params["batch_stats"]
+        lr = kwargs.get("lr", 1e-3)
+        optimizer = optax.adam(lr)
         if prev_params:
             _params = {}
             _params["params"] = prev_params
@@ -238,8 +250,65 @@ class Model(ABC):
             # last_layer = list(_params["params"].keys())[-1]
             # _params["params"][last_layer] = tree_map(jnp.zeros_like,_params["params"][last_layer])
             # _params["batch_stats"] = prev_stats
-        lr = kwargs.get("lr", 1e-3)
-        optimizer = optax.adam(lr)
+            # lr *= 0.1
+            partition_optimizers = {
+                "trainable": optax.adam(1e-3),
+                "frozen": optax.set_to_zero(),
+            }
+            param_partitions = traverse_util.path_aware_map(
+                lambda path, v: "frozen" if "4" or "3" in path else "trainable", params
+            )
+            # optimizer = optax.multi_transform(partition_optimizers, param_partitions)
+            # optimizer = optax.chain(optimizer, optax.contrib.reduce_on_plateau())
+
+        gamma = kwargs.get("gamma", 0.1)
+        batch_size = kwargs.get("batch_size", 512)
+        n_epochs = kwargs.get("n_epochs", 50)
+
+        base_learning_rate = lr
+        transition_steps = 50
+        gamma = 0.9
+        schedule = optax.exponential_decay(
+            init_value=base_learning_rate,
+            transition_steps=transition_steps,
+            decay_rate=gamma,
+        )
+        mask = jax.tree_util.tree_map(lambda x: x.ndim != 1, params)
+        # Create the Adam optimizer with the learning rate schedule
+        # optimizer = optax.chain(
+        #     optax.clip_by_global_norm(1.0),
+        #     optax.adam(1e-2),
+        #     optax.ema(decay=0.999)
+        #     )
+
+        # schedule = optax.warmup_cosine_decay_schedule(
+        #     init_value=0.0,
+        #     peak_value=1.0,
+        #     warmup_steps=50,
+        #     decay_steps=1_000,
+        #     end_value=0.0,
+        # )
+
+        # optimizer = optax.chain(
+        #     optax.clip_by_global_norm(1.0),
+        #     # optax.trace(decay=0.9, nesterov=False),
+        #     # optax.adamw(learning_rate=schedule),
+        #     optax.adamw(lr, mask = mask),
+        #     optax.contrib.reduce_on_plateau(
+        #         factor = 0.5,
+        #         patience=transition_steps,
+        #         cooldown=transition_steps//2,
+
+        #         # factor=0.5,
+        #         # min_delta=1e-3,
+        #         # mode="min",
+        #         # min_lr=1e-5,
+        #     ),
+        #     # optax.add_noise(1e-3, 1.0, 0),
+        # )
+        # # optimizer.init(params)
+
+        # optimizer = optax.adam(lr)
         params = _params["params"]
         batch_stats = _params["batch_stats"]
 
@@ -249,6 +318,7 @@ class Model(ABC):
             batch_stats=batch_stats,
             tx=optimizer,
             losses=[],
+            # val = 1e-1
         )
 
     def _init_calibrate_state(self, **kwargs):
