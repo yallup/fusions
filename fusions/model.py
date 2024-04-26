@@ -5,6 +5,7 @@ import anesthetic as ns
 import optax
 from flax import linen as nn
 from flax import traverse_util
+from optax import tree_utils as otu
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
@@ -22,6 +23,8 @@ from jax import jit, tree_map
 class Trace:
     iteration: int = field(default=0)
     losses: list[float] = field(default_factory=list)
+    lr: list[float] = field(default_factory=list)
+    calibrate_losses: list[float] = field(default_factory=list)
 
 
 class Model(ABC):
@@ -144,10 +147,10 @@ class Model(ABC):
         @jit
         def update_step(state, batch, batch_prior, rng):
             (val, updates), grads = jax.value_and_grad(self.loss, has_aux=True)(
-                state.params, batch, batch_prior, state.batch_stats, rng
+                state.params, batch, batch_prior, rng
             )
             state = state.apply_gradients(grads=grads, value=val)
-            state = state.replace(batch_stats=updates["batch_stats"])
+            # state = state.replace(batch_stats=updates["batch_stats"])
             # state = state.replace(value=val)
             return val, state
 
@@ -172,12 +175,14 @@ class Model(ABC):
 
             # losses.append(loss)
             if (k + 1) % 10 == 0:
-                self.trace.losses.append(jnp.mean(jnp.array(losses[-100:])))
+                ma = jnp.mean(jnp.array(losses[-10:]))
+                self.trace.losses.append(ma)
+                tepochs.set_postfix(loss=ma)
                 self.trace.iteration += 1
-
-            #     mean_loss = jnp.mean(jnp.array(losses[-10:]))
-            #     self.state.losses.append((mean_loss, k))
-            #     tepochs.set_postfix(loss=mean_loss)
+                lr_scale = otu.tree_get(self.state, "scale")
+                self.trace.lr.append(lr_scale)
+                # if lr_scale < 1e-1:
+                #     break
 
     def _train_calibrator(self, data_a, data_b, **kwargs):
         """Internal wrapping of training loop."""
@@ -186,11 +191,11 @@ class Model(ABC):
 
         @jit
         def update_step(state, batch, batch_labels, rng):
-            (val, updates), grads = jax.value_and_grad(
-                self.calibrate_loss, has_aux=True
-            )(state.params, batch, batch_labels, state.batch_stats, rng)
+            val, grads = jax.value_and_grad(self.calibrate_loss)(
+                state.params, batch, batch_labels
+            )
             state = state.apply_gradients(grads=grads)
-            state = state.replace(batch_stats=updates["batch_stats"])
+            # state = state.replace(batch_stats=updates["batch_stats"])
             return val, state
 
         train_size = data_a.shape[0]
@@ -205,6 +210,7 @@ class Model(ABC):
         labels_a = jnp.zeros(data_a.shape[0])
         labels_b = jnp.ones(data_b.shape[0])
         labels = jnp.concatenate([labels_a, labels_b])
+        labels = jnp.asarray(labels, dtype=int)
         data = jnp.concatenate([data_a, data_b])
 
         losses = []
@@ -230,92 +236,72 @@ class Model(ABC):
                 )
                 losses.append(loss)
 
+                # losses.append(loss)
+                if (k + 1) % 10 == 0:
+                    ma = jnp.mean(jnp.array(losses[-10:]))
+                    self.trace.calibrate_losses.append(ma)
+                    tepochs.set_postfix(loss=ma)
+
     def _init_state(self, **kwargs):
         """Initialise the state of the training."""
         prev_params = kwargs.get("params", None)
-        prev_stats = kwargs.get("batch_stats", None)
         dummy_x = jnp.zeros((1, self.ndims))
         dummy_t = jnp.ones((1, 1))
         self.rng, step_rng = random.split(self.rng)
-        _params = self.score_model().init(step_rng, dummy_x, dummy_t, train=False)
+        _params = self.score_model().init(step_rng, dummy_x, dummy_t)
         params = _params["params"]
-        stats = _params["batch_stats"]
-        lr = kwargs.get("lr", 1e-3)
-        optimizer = optax.adam(lr)
+
+        lr = kwargs.get("lr", 1e-2)
+        base_learning_rate = lr
+
+        transition_steps = kwargs.get("transition_steps", 100)
+
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.adamw(
+                optax.cosine_decay_schedule(lr, transition_steps * 10, alpha=lr * 1e-2)
+            ),
+            # optax.contrib.reduce_on_plateau(
+            #     factor=0.5,
+            #     patience=transition_steps // 10,  # 10
+            #     # cooldown=transition_steps // 10,  # 10
+            #     accumulation_size=transition_steps,
+            # ),
+        )
+
         if prev_params:
             _params = {}
             _params["params"] = prev_params
             # _params["params"] = params
-            _params["batch_stats"] = stats
-            # last_layer = list(_params["params"].keys())[-1]
-            # _params["params"][last_layer] = tree_map(jnp.zeros_like,_params["params"][last_layer])
-            # _params["batch_stats"] = prev_stats
-            # lr *= 0.1
-            partition_optimizers = {
-                "trainable": optax.adam(1e-3),
-                "frozen": optax.set_to_zero(),
-            }
-            param_partitions = traverse_util.path_aware_map(
-                lambda path, v: "frozen" if "4" or "3" in path else "trainable", params
+            lr = 1e-3
+            # _params["batch_stats"] = stats
+            last_layer = list(_params["params"].keys())[-1]
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(1.0),
+                optax.adamw(
+                    optax.cosine_decay_schedule(
+                        lr * 5, transition_steps * 10, alpha=lr * 1e-2
+                    )
+                ),
+                #     optax.contrib.reduce_on_plateau(
+                #         factor=0.5,
+                #         patience=transition_steps // 10,  # 10
+                #         # cooldown=transition_steps // 10,  # 10
+                #         accumulation_size=transition_steps,
+                #     ),
             )
-            # optimizer = optax.multi_transform(partition_optimizers, param_partitions)
-            # optimizer = optax.chain(optimizer, optax.contrib.reduce_on_plateau())
+
+            # _params["params"][last_layer] = tree_map(jnp.zeros_like,_params["params"][last_layer])
 
         gamma = kwargs.get("gamma", 0.1)
-        batch_size = kwargs.get("batch_size", 512)
-        n_epochs = kwargs.get("n_epochs", 50)
 
-        base_learning_rate = lr
-        transition_steps = 50
-        gamma = 0.9
-        schedule = optax.exponential_decay(
-            init_value=base_learning_rate,
-            transition_steps=transition_steps,
-            decay_rate=gamma,
-        )
-        mask = jax.tree_util.tree_map(lambda x: x.ndim != 1, params)
-        # Create the Adam optimizer with the learning rate schedule
-        # optimizer = optax.chain(
-        #     optax.clip_by_global_norm(1.0),
-        #     optax.adam(1e-2),
-        #     optax.ema(decay=0.999)
-        #     )
-
-        # schedule = optax.warmup_cosine_decay_schedule(
-        #     init_value=0.0,
-        #     peak_value=1.0,
-        #     warmup_steps=50,
-        #     decay_steps=1_000,
-        #     end_value=0.0,
-        # )
-
-        # optimizer = optax.chain(
-        #     optax.clip_by_global_norm(1.0),
-        #     # optax.trace(decay=0.9, nesterov=False),
-        #     # optax.adamw(learning_rate=schedule),
-        #     optax.adamw(lr, mask = mask),
-        #     optax.contrib.reduce_on_plateau(
-        #         factor = 0.5,
-        #         patience=transition_steps,
-        #         cooldown=transition_steps//2,
-
-        #         # factor=0.5,
-        #         # min_delta=1e-3,
-        #         # mode="min",
-        #         # min_lr=1e-5,
-        #     ),
-        #     # optax.add_noise(1e-3, 1.0, 0),
-        # )
-        # # optimizer.init(params)
-
-        # optimizer = optax.adam(lr)
         params = _params["params"]
-        batch_stats = _params["batch_stats"]
+        # batch_stats = _params["batch_stats"]
 
         self.state = TrainState.create(
             apply_fn=self.score_model().apply,
             params=params,
-            batch_stats=batch_stats,
+            # batch_stats=batch_stats,
             tx=optimizer,
             losses=[],
             # val = 1e-1
@@ -324,16 +310,29 @@ class Model(ABC):
     def _init_calibrate_state(self, **kwargs):
         dummy_x = jnp.zeros((1, self.ndims))
 
-        _params = self.classifier_model().init(self.rng, dummy_x, train=False)
-        lr = kwargs.get("lr", 1e-3)
+        _params = self.classifier_model().init(self.rng, dummy_x)
+        lr = kwargs.get("lr", 1e-2)
         optimizer = optax.adam(lr)
         params = _params["params"]
-        batch_stats = _params["batch_stats"]
-
+        # batch_stats = _params["batch_stats"]
+        transition_steps = kwargs.get("transition_steps", 100)
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.adamw(
+                optax.cosine_decay_schedule(lr * 5, transition_steps * 2, alpha=lr)
+            ),
+            optax.contrib.reduce_on_plateau(
+                factor=0.5,
+                patience=transition_steps // 10,  # 10
+                # cooldown=transition_steps // 10,  # 10
+                accumulation_size=transition_steps,
+            ),
+        )
+        optimizer = optax.chain(optax.adamw(optax.cosine_decay_schedule(lr, 1000)))
         self.calibrate_state = TrainState.create(
             apply_fn=self.classifier_model().apply,
             params=params,
-            batch_stats=batch_stats,
+            # batch_stats=batch_stats,
             tx=optimizer,
             losses=[],
         )
@@ -343,20 +342,26 @@ class Model(ABC):
         """Loss function for training the diffusion model."""
         pass
 
-    def calibrate_loss(self, params, batch, labels, batch_stats, rng):
+    def calibrate_loss(self, params, batch, labels):
         """Loss function for training the calibrator."""
-        output, updates = self.calibrate_state.apply_fn(
-            {"params": params, "batch_stats": batch_stats},
+        output = self.calibrate_state.apply_fn(
+            {"params": params},
             batch,
-            train=True,
-            mutable=["batch_stats"],
+            # train=True,
+            # mutable=["batch_stats"],
         )
 
-        loss = optax.sigmoid_binary_cross_entropy(output.squeeze(), labels).mean()
-        return loss, updates
+        loss = optax.softmax_cross_entropy_with_integer_labels(
+            output.squeeze(), labels
+        ).mean()
+        return loss
 
     def predict_weight(self, samples, **kwargs):
-        return nn.sigmoid(self._predict_weight(samples, **kwargs))
+        prob = kwargs.pop("prob", False)
+        if prob:
+            return nn.softmax(self._predict_weight(samples, **kwargs))
+        else:
+            return self._predict_weight(samples, **kwargs)
 
     def train(self, data, **kwargs):
         """Train the diffusion model on the provided data.
@@ -387,7 +392,7 @@ class Model(ABC):
             self._init_state(**kwargs)
         else:
             self._init_state(
-                params=self.state.params, batch_stats=self.state.batch_stats
+                params=self.state.params  # batch_stats=self.state.batch_stats
             )
         # self._init_state=self._init_state.replace(grads=jax.tree_map(jnp.zeros_like, self._init_state.params))
         # self.state.params.replace(grads=jax.tree_map(jnp.zeros_like, self.state.params))
@@ -398,11 +403,11 @@ class Model(ABC):
         self._predict = lambda x, t: self.state.apply_fn(
             {
                 "params": self.state.params,
-                "batch_stats": self.state.batch_stats,
+                # "batch_stats": self.state.batch_stats,
             },
             x,
             t,
-            train=False,
+            # train=False,
         )
 
     def calibrate(self, samples_a, samples_b, **kwargs):
@@ -430,8 +435,8 @@ class Model(ABC):
         self._predict_weight = lambda x: self.calibrate_state.apply_fn(
             {
                 "params": self.calibrate_state.params,
-                "batch_stats": self.calibrate_state.batch_stats,
+                # "batch_stats": self.calibrate_state.batch_stats,
             },
             x,
-            train=False,
+            # train=False,
         )

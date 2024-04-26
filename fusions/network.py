@@ -36,7 +36,7 @@ import jax.random as random
 
 
 class TrainState(train_state.TrainState):
-    batch_stats: Any
+    # batch_stats: Any
     losses: Any
     value: float = 1.0
 
@@ -110,21 +110,21 @@ def zeros_init(key, shape, dtype=jnp.float32):
 class Classifier(nn.Module):
     """A simple MLP classifier."""
 
-    n_initial: int = 256
+    n_initial: int = 128
     n_hidden: int = 32
     n_layers: int = 3
     act = nn.leaky_relu
 
     @nn.compact
-    def __call__(self, x, train: bool):
+    def __call__(self, x):
         x = nn.Dense(self.n_initial)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
+        # x = nn.BatchNorm(use_running_average=not train)(x)
         x = nn.silu(x)
         for i in range(self.n_layers):
             x = nn.Dense(self.n_hidden)(x)
-            x = nn.BatchNorm(use_running_average=not train)(x)
+            # x = nn.BatchNorm(use_running_average=not train)(x)
             x = nn.silu(x)
-        x = nn.Dense(1)(x)
+        x = nn.Dense(2)(x)
         return x
 
 
@@ -132,14 +132,14 @@ class ScoreApprox(nn.Module):
     """A simple model with multiple fully connected layers and some fourier features for the time variable."""
 
     n_initial: int = 128
-    n_hidden: int = 64
+    n_hidden: int = 32
     encode_fourier_features: bool = True
     n_fourier_features: int = 4
     n_layers: int = 3
     act = nn.leaky_relu
 
     @nn.compact
-    def __call__(self, x, t, train: bool):
+    def __call__(self, x, t):
         in_size = x.shape[-1]
         # act = nn.relu
         # y = nn.BatchNorm(use_running_average=not train)(x)
@@ -159,12 +159,12 @@ class ScoreApprox(nn.Module):
         # y= nn.BatchNorm(use_running_average=not train)(x)
         x = jnp.concatenate([x, t], axis=-1)
         x = nn.Dense(self.n_initial)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
-        x = nn.gelu(x)
+        # x = nn.BatchNorm(use_running_average=not train)(x)
+        x = nn.silu(x)
         for i in range(self.n_layers):
             x = nn.Dense(self.n_hidden)(x)
-            x = nn.BatchNorm(use_running_average=not train)(x)
-            x = nn.gelu(x)
+            # x = nn.BatchNorm(use_running_average=not train)(x)
+            x = nn.silu(x)
         x = nn.Dense(in_size, kernel_init=zeros_init)(x)
         return x
 

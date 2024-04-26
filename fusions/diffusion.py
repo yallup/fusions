@@ -9,7 +9,7 @@ from jax.lax import scan
 
 class Diffusion(Model):
     beta_min: float = 1e-3
-    beta_max: float = 1
+    beta_max: float = 3
     steps: int = 1000
     train_ts = jnp.arange(1, steps) / (steps - 1)
     # train_ts=jnp.geomspace(beta_min,beta_max,steps)
@@ -86,7 +86,7 @@ class Diffusion(Model):
         )
 
     @partial(jit, static_argnums=[0])
-    def loss(self, params, batch, batch_prior, batch_stats, rng):
+    def loss(self, params, batch, batch_prior, rng):
         """Loss function for training the diffusion model.
 
         Args:
@@ -106,15 +106,15 @@ class Diffusion(Model):
         stds = jnp.sqrt(vs)
         rng, step_rng = random.split(rng)
         # noise = random.normal(step_rng, batch.shape)
-        # noise = batch_prior  # + self.noise * random.normal(step_rng, batch.shape)
-        noise = batch_prior  # + random.normal(step_rng, batch.shape)
+        noise = batch_prior + self.noise * random.normal(step_rng, batch.shape)
+        # noise = batch_prior  # + random.normal(step_rng, batch.shape)
         # noise = random.normal(step_rng, batch.shape)
         xt = batch * mean_coeff + noise * stds
         output, updates = self.state.apply_fn(
-            {"params": params, "batch_stats": batch_stats},
+            {"params": params},
             xt,
             t,
-            train=True,
+            # train=True,
             mutable=["batch_stats"],
         )
 

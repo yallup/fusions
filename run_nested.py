@@ -14,7 +14,7 @@ from fusions.integrate import NestedDiffusion, SequentialDiffusion
 
 os.makedirs("plots", exist_ok=True)
 
-dims = 5
+dims = 10
 data_dims = dims
 # v hard
 np.random.seed(123456)
@@ -56,6 +56,8 @@ data_dims = dims * 2
 #             return x
 
 TargetModel = LinearModel(M=np.random.randn(data_dims, dims), C=0.01)
+C = np.random.randn(dims, dims) * 0.1
+TargetModel = LinearModel(M=np.eye(dims), m=np.random.randn(dims), C=C @ C.T)
 
 # np.random.seed(123456)
 # data_dims = dims
@@ -89,25 +91,25 @@ class likelihood(object):
 
 from fusions.network import ScoreApprox
 
-network = ScoreApprox(n_initial=32, n_hidden=16, n_layers=3, n_fourier_features=4)
+network = ScoreApprox(n_initial=128, n_hidden=32, n_layers=3, n_fourier_features=4)
 # diffuser = SequentialDiffusion(
 #     prior=Model.prior(), likelihood=likelihood()# , schedule =np.geomspace
 # )
 model = CFM
 
-model = Diffusion
+# model = Diffusion
 diffuser = NestedDiffusion(
     prior=TargetModel.prior(), likelihood=likelihood(), model=model
 )
 diffuser.settings.target_eff = 1.0
-diffuser.settings.epoch_factor = 15
-diffuser.settings.n = 5000
-diffuser.settings.noise = 1e-3
-diffuser.settings.prior_boost = 1
+diffuser.settings.epoch_factor = 10
+diffuser.settings.n = 3000
+diffuser.settings.noise = 1e-4
+diffuser.settings.prior_boost = 5
 diffuser.settings.eps = 1e-2
-diffuser.settings.batch_size = 512
+diffuser.settings.batch_size = diffuser.settings.n
 diffuser.settings.restart = False
-diffuser.settings.lr = 1e-3
+diffuser.settings.lr = 1e-2
 diffuser.score_model = network
 # diffuser.run(steps=10, n=500)
 diffuser.run()

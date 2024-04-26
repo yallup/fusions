@@ -89,7 +89,7 @@ class CFM(Model):
         return yt, jt
 
     @partial(jit, static_argnums=[0])
-    def loss(self, params, batch, batch_prior, batch_stats, rng):
+    def loss(self, params, batch, batch_prior, rng):
         """Loss function for training the CFM score.
 
         Args:
@@ -113,10 +113,9 @@ class CFM(Model):
         # psi_0 = t * batch + (1 - t) * batch_prior
 
         output, updates = self.state.apply_fn(
-            {"params": params, "batch_stats": batch_stats},
+            {"params": params},
             psi_0,
             t,
-            train=True,
             mutable=["batch_stats"],
         )
         psi = x1 - x0
