@@ -251,7 +251,7 @@ class NestedDiffusion(Integrator):
         live = self.sample(n * self.settings.prior_boost, self.prior, self.logzero)
         step = 0
         logger.info("Done sampling prior")
-        live, contour, r = self.stash(live, n // 2, drop=False)
+        live, contour = self.stash(live, n // 2, drop=False)
         self.dist = self.prior
         self.update_stats(live, n)
         logger.info(f"{self.stats}")
