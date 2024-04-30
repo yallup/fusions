@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # import jax.random as rng
-from lsbi.model import LinearModel, MixtureModel
+# from lsbi.model import LinearModel, MixtureModel
 from scipy.optimize import rosen
 from scipy.stats import multivariate_normal, norm, uniform
 
@@ -48,19 +48,9 @@ class prior(object):
         return np.ones(x.shape[0]) * 1.0
 
 
-# def likelihood(x):
-#     return -np.log(np.sum(100.0*(x[1:]-x[:-1]**2.0)**2.0 + (1-x[:-1])**2.0))
-
-# def prior(hypercube):
-#     return hypercube*4 -2
-
-
 from fusions.network import ScoreApprox
 
 network = ScoreApprox(n_initial=128, n_hidden=32, n_layers=3, n_fourier_features=4)
-# diffuser = SequentialDiffusion(
-#     prior=Model.prior(), likelihood=likelihood()# , schedule =np.geomspace
-# )
 model = CFM
 
 # model = Diffusion
