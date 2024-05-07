@@ -2,10 +2,9 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from fusions.model import Model
 from jax import grad, jit, random, vmap
 from jax.lax import scan
-
-from fusions.model import Model
 
 
 class Diffusion(Model):
@@ -42,13 +41,19 @@ class Diffusion(Model):
         """Dispersion of the diffusion model."""
         return jnp.sqrt(self.beta_t(t))
 
-    @partial(jit, static_argnums=[0, 2])
-    def reverse_process(self, initial_samples, score, rng):
+    @partial(jit, static_argnums=[0, 2, 4, 5])
+    def reverse_process(self, initial_samples, score, rng, steps=0, solution="none"):
         """Run the reverse SDE.
 
         Args:
             initial_samples (jnp.ndarray): Samples to run the model on.
             score (callable): Score function.
+            rng: Jax Random number generator key.
+
+        Keyword Args:
+            steps (int, optional) : Number of time steps to save in addition to t=1. Defaults to 0.
+            solution (str, optional): Method to use for the jacobian. Defaults to "none".
+                        one of "exact", "none", "approx".
 
         Returns:
             Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
@@ -72,11 +77,25 @@ class Diffusion(Model):
         dts = self.train_ts[1:] - self.train_ts[:-1]
         params = jnp.stack([self.train_ts[:-1], dts], axis=1)
         (x, _), (x_t, _) = scan(f, (initial_samples, step_rng), params)
-        return x, x_t
+        xs = jnp.concatenate([x_t, x[None, ...]], axis=0)
+        xs = jnp.moveaxis(xs, 1, 0)
+        jac = jnp.zeros_like(xs)  # todo
+        return (
+            xs[:, -(steps + 1) :, :],
+            jac[:, -(steps + 1) :, :],
+        )
 
     @partial(jit, static_argnums=[0])
     def loss(self, params, batch, batch_prior, batch_stats, rng):
-        """Loss function for training the diffusion model."""
+        """Loss function for training the diffusion model.
+
+        Args:
+            params (Any): Model parameters.
+            batch (jnp.ndarray): Batch of data.
+            batch_prior (jnp.ndarray): Batch of prior samples.
+            batch_stats (Any): Batch statistics (typicall).
+            rng: Jax Random number generator key.
+        """
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
         t = random.randint(step_rng, (N_batch, 1), 1, self.steps) / (self.steps - 1)
