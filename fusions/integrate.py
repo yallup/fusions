@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from anesthetic import MCMCSamples, NestedSamples, make_2d_axes, read_chains
 from anesthetic.utils import compress_weights, neff
-from jax import random
 
 # from anesthetic.read.hdf import read_hdf, write_hdf
 from scipy.special import logsumexp
@@ -25,6 +24,7 @@ from tqdm import tqdm
 
 from fusions.model import Model
 from fusions.utils import ellipse, unit_hyperball, unit_hypercube
+from jax import random
 
 
 @dataclass
