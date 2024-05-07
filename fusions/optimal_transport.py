@@ -11,8 +11,8 @@ from jax import random
 
 class OTBase(ABC):
     def __init__(self, x0, x1):
-        self.x0 = x0
-        self.x1 = x1
+        self.x0 = np.atleast_2d(x0)
+        self.x1 = np.atleast_2d(x1)
 
     @abstractmethod
     def sample(self, rng=None, batch_size=128):

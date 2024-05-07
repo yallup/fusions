@@ -66,6 +66,8 @@ class CFM(Model):
             # term = dfx.ODETerm(score_args_exact)
             # solver = dfx.Heun()
             solver = dfx.Dopri5()
+            # solver = dfx.Dopri8()
+            # solver = dfx.Tsit5()
 
             solver_approx
 
@@ -87,7 +89,7 @@ class CFM(Model):
         return yt, jt
 
     @partial(jit, static_argnums=[0])
-    def loss(self, params, batch, batch_prior, batch_stats, rng):
+    def loss(self, params, batch, batch_prior, rng):
         """Loss function for training the CFM score.
 
         Args:
@@ -98,7 +100,7 @@ class CFM(Model):
             rng: Jax Random number generator key.
 
         """
-        sigma_noise = 1e-3
+        # sigma_noise = 1e-3
         rng, step_rng = random.split(rng)
         N_batch = batch.shape[0]
 
@@ -106,12 +108,14 @@ class CFM(Model):
         x0 = batch_prior
         x1 = batch
         noise = random.normal(step_rng, (N_batch, self.ndims))
-        psi_0 = t * batch + (1 - t) * batch_prior + sigma_noise * noise
+        # psi_0 = t * batch + (1 - t) * batch_prior + sigma_noise * noise
+        psi_0 = t * batch + (1 - t) * batch_prior + self.noise * noise
+        # psi_0 = t * batch + (1 - t) * batch_prior
+
         output, updates = self.state.apply_fn(
-            {"params": params, "batch_stats": batch_stats},
+            {"params": params},
             psi_0,
             t,
-            train=True,
             mutable=["batch_stats"],
         )
         psi = x1 - x0

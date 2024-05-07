@@ -1,11 +1,14 @@
 from functools import partial
 from typing import Any
 
+import optax
+from flax import linen as nn
+from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
+from flax.training import train_state
+
 import jax
 import jax.numpy as jnp
 import jax.random as random
-from flax import linen as nn
-from flax.training import train_state
 
 # class DataLoader(object):
 #     def __init__(self, data, batch_size, rng, shuffle=True) -> None:
@@ -33,8 +36,71 @@ from flax.training import train_state
 
 
 class TrainState(train_state.TrainState):
-    batch_stats: Any
+    # batch_stats: Any
     losses: Any
+    value: float = 1.0
+
+    def apply_gradients(self, *, grads, **kwargs):
+        """Updates `step`, `params`, `opt_state` and `**kwargs` in return value.
+
+        Note that internally this function calls `.tx.update()` followed by a call
+        to `optax.apply_updates()` to update `params` and `opt_state`.
+
+        Args:
+        grads: Gradients that have the same pytree structure as `.params`.
+        **kwargs: Additional dataclass attributes that should be `.replace()`-ed.
+
+        Returns:
+        An updated instance of `self` with `step` incremented by one, `params`
+        and `opt_state` updated by applying `grads`, and additional attributes
+        replaced as specified by `kwargs`.
+        """
+        val = kwargs.get("val", 1.0)
+        if OVERWRITE_WITH_GRADIENT in grads:
+            grads_with_opt = grads["params"]
+            params_with_opt = self.params["params"]
+        else:
+            grads_with_opt = grads
+            params_with_opt = self.params
+
+        updates, new_opt_state = self.tx.update(
+            grads_with_opt, self.opt_state, params_with_opt, value=val
+        )
+        new_params_with_opt = optax.apply_updates(params_with_opt, updates)
+
+        # As implied by the OWG name, the gradients are used directly to update the
+        # parameters.
+        if OVERWRITE_WITH_GRADIENT in grads:
+            new_params = {
+                "params": new_params_with_opt,
+                OVERWRITE_WITH_GRADIENT: grads[OVERWRITE_WITH_GRADIENT],
+            }
+        else:
+            new_params = new_params_with_opt
+        return self.replace(
+            step=self.step + 1,
+            params=new_params,
+            opt_state=new_opt_state,
+            **kwargs,
+        )
+
+    @classmethod
+    def create(cls, *, apply_fn, params, tx, **kwargs):
+        """Creates a new instance with `step=0` and initialized `opt_state`."""
+        # We exclude OWG params when present because they do not need opt states.
+        params_with_opt = (
+            params["params"] if OVERWRITE_WITH_GRADIENT in params else params
+        )
+        opt_state = tx.init(params_with_opt)
+        return cls(
+            step=0,
+            apply_fn=apply_fn,
+            params=params,
+            tx=tx,
+            opt_state=opt_state,
+            # val = 1.0,
+            **kwargs,
+        )
 
 
 def zeros_init(key, shape, dtype=jnp.float32):
@@ -44,53 +110,60 @@ def zeros_init(key, shape, dtype=jnp.float32):
 class Classifier(nn.Module):
     """A simple MLP classifier."""
 
-    n_initial: int = 256
+    n_initial: int = 128
     n_hidden: int = 32
     n_layers: int = 3
     act = nn.leaky_relu
 
     @nn.compact
-    def __call__(self, x, train: bool):
+    def __call__(self, x):
         x = nn.Dense(self.n_initial)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
+        # x = nn.BatchNorm(use_running_average=not train)(x)
         x = nn.silu(x)
         for i in range(self.n_layers):
             x = nn.Dense(self.n_hidden)(x)
-            x = nn.BatchNorm(use_running_average=not train)(x)
+            # x = nn.BatchNorm(use_running_average=not train)(x)
             x = nn.silu(x)
-        x = nn.Dense(1)(x)
+        x = nn.Dense(2)(x)
         return x
 
 
 class ScoreApprox(nn.Module):
     """A simple model with multiple fully connected layers and some fourier features for the time variable."""
 
-    n_initial: int = 256
+    n_initial: int = 128
     n_hidden: int = 32
+    encode_fourier_features: bool = True
+    n_fourier_features: int = 4
     n_layers: int = 3
     act = nn.leaky_relu
 
     @nn.compact
-    def __call__(self, x, t, train: bool):
+    def __call__(self, x, t):
         in_size = x.shape[-1]
         # act = nn.relu
+        # y = nn.BatchNorm(use_running_average=not train)(x)
         # # t = jnp.concatenate([t - 0.5, jnp.cos(2 * jnp.pi * t)], axis=1)
-        t = jnp.concatenate(
-            [
-                t - 0.5,
-                jnp.cos(2 * jnp.pi * t),
-                jnp.sin(2 * jnp.pi * t),
-                -jnp.cos(4 * jnp.pi * t),
-            ],
-            axis=-1,
-        )
+        # encode 128 fourier features for the timestep
+        f = jnp.arange(1, self.n_fourier_features + 1)
+        t = jnp.concatenate([t - 0.5, jnp.sin(2 * jnp.pi * t * f)], axis=-1)
+        # t = jnp.concatenate(
+        #     [
+        #         t - 0.5,
+        #         jnp.cos(2 * jnp.pi * t),
+        #         jnp.sin(2 * jnp.pi * t),
+        #         -jnp.cos(4 * jnp.pi * t),
+        #     ],
+        #     axis=-1,
+        # )
+        # y= nn.BatchNorm(use_running_average=not train)(x)
         x = jnp.concatenate([x, t], axis=-1)
         x = nn.Dense(self.n_initial)(x)
-        x = nn.BatchNorm(use_running_average=not train)(x)
+        # x = nn.BatchNorm(use_running_average=not train)(x)
         x = nn.silu(x)
         for i in range(self.n_layers):
             x = nn.Dense(self.n_hidden)(x)
-            x = nn.BatchNorm(use_running_average=not train)(x)
+            # x = nn.BatchNorm(use_running_average=not train)(x)
             x = nn.silu(x)
         x = nn.Dense(in_size, kernel_init=zeros_init)(x)
         return x
