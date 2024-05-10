@@ -15,7 +15,7 @@ from fusions.integrate import NestedDiffusion, SequentialDiffusion
 
 os.makedirs("plots", exist_ok=True)
 
-dims = 10
+dims = 2
 
 
 class likelihood(object):
@@ -45,6 +45,8 @@ class prior(object):
         return np.random.rand(size, dims) * 10 - 5
 
     def logpdf(self, x):
+        if np.abs(x) > 5:
+            return -1e30
         return np.ones(x.shape[0]) * 1.0
 
 
@@ -56,7 +58,7 @@ model = CFM
 # model = Diffusion
 diffuser = NestedDiffusion(prior=prior(), likelihood=likelihood(), model=model)
 diffuser.settings.target_eff = 1.0
-diffuser.settings.epoch_factor = 5
+diffuser.settings.epoch_factor = 1.0
 diffuser.settings.n = 2000
 diffuser.settings.noise = 1e-5
 diffuser.settings.prior_boost = 2

@@ -12,10 +12,12 @@ from dataclasses import dataclass, field
 from pickle import dump, load
 
 import anesthetic.termination as term
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from anesthetic import MCMCSamples, NestedSamples, make_2d_axes, read_chains
 from anesthetic.utils import compress_weights, neff
+from jax import random
 
 # from anesthetic.read.hdf import read_hdf, write_hdf
 from scipy.special import logsumexp
@@ -24,7 +26,6 @@ from tqdm import tqdm
 
 from fusions.model import Model
 from fusions.utils import ellipse, unit_hyperball, unit_hypercube
-from jax import random
 
 
 @dataclass
@@ -145,13 +146,47 @@ class Integrator(ABC):
         if isinstance(dist, Model):
             logging.log(logging.INFO, f"Sampling {n} points")
             latent_x = dist.prior.rvs(n)
-            x, j = dist.predict(latent_x, jac=True, solution="exact")
+            # x, j = dist.predict(latent_x, jac=True, solution="exact")
+            self.rng, step_rng = random.split(self.rng)
+            # x = dist.mala(
+            #     np.asarray([xi.x for xi in self.live]),
+            #     dist._predict,
+            #     step_rng,
+            #     N=1e2,
+            #     eps = 1e-3
+            # )
+            # x = dist.reverse_stochastic_process(
+            #     np.asarray([xi.x for xi in self.live]),
+            #     dist._predict,
+            #     step_rng,
+            #     # N=1e2,
+            #     # eps = 1e-3
+            # )
+            guide_score = lambda x: dist.guidance_grad(
+                x, jnp.ones(x.shape[0], dtype=int)
+            )
+            x, j = dist.guided_reverse_process(
+                latent_x,
+                dist._predict,
+                dist.guidance_grad,
+                step_rng,
+                solution="none",
+            )
+
+            # xi = np.asarray([xi.x for xi in self.dead + self.live])
+            # starting = xi[np.random.choice(len(xi), n)]
+            # x = dist.predict(starting)
+
             latent_x = np.asarray(latent_x)
-            latent_pi = self.dist.prior.logpdf(latent_x)
+            # latent_pi = self.dist.prior.logpdf(latent_x)
             x = np.asarray(x)
             mask = self.likelihood.logpdf(x) > logl_birth
+            print(f"mask: {mask.sum()}/{n}")
             x = x[mask]
-            w = np.exp(j[mask] - latent_pi[mask])  # - calibrate_logprob.squeeze()[mask]
+            w = np.ones(x.shape[0])
+            # w = np.exp(
+            #     j[mask] - latent_pi[mask]
+            # )  # - calibrate_logprob.squeeze()[mask]
             latent_x = latent_x[mask]
         else:
             x = np.asarray(dist.rvs(n))
@@ -262,8 +297,23 @@ class NestedDiffusion(Integrator):
         ):
             # xi, ci = np.random.choice(len(live), (2, len(live) // 2), replace=False)
             self.live = live
-            self.dist = self.train_diffuser(self.dist, live)
-            x = self.dist.rvs(len(live))
+            self.last_live = np.asarray([xi.x for xi in self.dead[:-n]])
+            # self.dist = self.model(self.latent, noise=self.settings.noise)
+            self.dist = self.train_diffuser(
+                self.dist,
+                live,
+                # prior_samples=np.asarray(
+                #     [xi.x for xi in self.dead]
+                # ),
+            )
+            # x=dist.rvs(n)
+            # x = self.dist.rvs(len(live)*10)
+            x = self.dist.prior.rvs(len(live) * 10)
+            self.dist.calibrate(
+                np.asarray(x),
+                np.asarray([xi.x for xi in self.live]),
+                n_epochs=500,
+            )
 
             self.trace.losses[step] = self.dist.trace.losses
             self.trace.lr[step] = self.dist.trace.lr
