@@ -2,19 +2,19 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import anesthetic as ns
+import jax
+import jax.numpy as jnp
+import jax.random as random
 import optax
 from flax import linen as nn
 from flax import traverse_util
+from jax import jit, tree_map
 from optax import tree_utils as otu
 from scipy.stats import multivariate_normal
 from tqdm import tqdm
 
-import jax
-import jax.numpy as jnp
-import jax.random as random
 from fusions.network import Classifier, ScoreApprox, TrainState
 from fusions.optimal_transport import NullOT, PriorExtendedNullOT
-from jax import jit, tree_map
 
 # from optax.contrib import reduce_on_plateau
 
@@ -82,13 +82,15 @@ class Model(ABC):
         jac = kwargs.get("jac", False)
         steps = kwargs.get("steps", 0)
         solution = kwargs.get("solution", "none")
+        rng = kwargs.pop("rng", self.rng)
         # self.rng, step_rng = random.split(self.rng)
         x, j = self.reverse_process(
             initial_samples,
             self._predict,
-            self.rng,
+            rng=rng,
             steps=steps,
             solution=solution,
+            **kwargs,
         )  # , step_rng)
         if jac:
             return x.squeeze(), j.squeeze()

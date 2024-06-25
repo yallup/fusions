@@ -11,7 +11,7 @@ A miniminal implementation of diffusion models in JAX (Flax). Tuned for usage in
 
 ## Quickstart
 
-Install `fusions` and `lsbi` from pypi  
+Install `fusions` and `lsbi` from pypi
 ```
 pip install lsbi fusions
 ```
@@ -20,19 +20,19 @@ create a 5D sampling problem then train a flow matched model to approximate the 
 
 ```python
 from fusions.cfm import CFM
-from lsbi.model import LinearMixtureModel
+from lsbi.model import MixtureModel
 from anesthetic import MCMCSamples
 import matplotlib.pyplot as plt
 import numpy as np
 
 
 dims = 5
-Model = LinearMixtureModel(
+Model = MixtureModel(
     M=np.stack([np.eye(dims), -np.eye(dims)]),
     C=np.eye(dims)*0.1,
 )
 
-data = Model.evidence().rvs(1)
+data = Model.evidence().rvs()
 
 diffusion = CFM(Model.prior())
 # diffusion = CFM(dims)

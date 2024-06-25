@@ -2,19 +2,29 @@ import math
 from functools import partial
 
 import diffrax as dfx
-from diffrax.saveat import SaveAt
-
 import jax.numpy as jnp
 import jax.random as random
-from fusions.model import Model
+from diffrax.saveat import SaveAt
 from jax import disable_jit, grad, jit, pmap, vjp, vmap
+
+from fusions.model import Model
 
 
 class CFM(Model):
     """Continuous Flow Matching."""
 
     @partial(jit, static_argnums=[0, 2, 4, 5])
-    def reverse_process(self, initial_samples, score, rng, steps=0, solution="exact"):
+    def reverse_process(
+        self,
+        initial_samples,
+        score,
+        rng,
+        steps=0,
+        solution="exact",
+        t0=0.0,
+        t=1.0,
+        dt0=1e-2,
+    ):
         """Run the reverse ODE.
 
         Args:
@@ -30,8 +40,7 @@ class CFM(Model):
         Returns:
             Tuple[jnp.ndarray, jnp.ndarray]: Samples from the posterior distribution. and the history of the process.
         """
-        t0, t1, dt0 = 0.0, 1.0, 1e-3
-        ts = jnp.linspace(t0, t1, steps)
+        ts = jnp.linspace(t0, t, steps)
 
         def solver_none(ti, conditions, args):
             xi, null_jac = conditions
@@ -75,7 +84,7 @@ class CFM(Model):
                 term,
                 solver,
                 t0,
-                t1,
+                t,
                 dt0,
                 conditions,
                 args=eps,
